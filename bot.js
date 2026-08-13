@@ -201,7 +201,7 @@ bot.start(async (ctx) => {
   updateUser(userId, { username: user.username });
 
   ctx.replyWithHTML(
-    `Добро пожаловать в <b>Gram Deals</b>!\n\nСервис, обеспечивающий безопасность и удобство проведения сделок с цифровыми подарками.\n\n🔒 Сервис спонсирован: @gram\n📧 Поддержка: @GramHelps\n\n✔️ Начните работу, нажав кнопку ниже.`,
+    `Добро пожаловать в <b>Gram Deals</b>!\n\nСервис, обеспечивающий безопасность и удобство проведения сделок с цифровыми подарками.\n\n🔒 Сервис спонсирован: @gram\n📧 Поддержка: @AgentNFTDeals\n\n✔️ Начните работу, нажав кнопку ниже.`,
     Markup.inlineKeyboard([
       [Markup.button.callback('🚀 Начать работу', 'main_menu')]
     ])
@@ -268,9 +268,11 @@ bot.action(/^cur_(.+)$/, async (ctx) => {
   ]));
 });
 
-bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
+// Исправленный обработчик суммы – срабатывает на любое число, даже с пробелами
+bot.hears(/^\s*(\d+(?:[.,]\d+)?)\s*$/, async (ctx) => {
   if (ctx.session.step !== 'create_deal_amount') return;
-  const amount = parseFloat(ctx.message.text);
+  const raw = ctx.message.text.trim().replace(',', '.');
+  const amount = parseFloat(raw);
   if (isNaN(amount) || amount <= 0) {
     return ctx.reply('❌ Введите корректное число (больше 0).');
   }
@@ -311,7 +313,7 @@ bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
     : `Ссылка для покупателя:\n${shareLink}`;
 
   await ctx.replyWithHTML(
-    `<b>Сделка создана!</b>\n\nID сделки: ${dealId}\nВаша роль: ${roleText}\nСумма: ${amount} ${currency}\nОписание:\n${links.join('\n')}\n\n${inviteText}\n\nПоддержка: @GramHelps`,
+    `<b>Сделка создана!</b>\n\nID сделки: ${dealId}\nВаша роль: ${roleText}\nСумма: ${amount} ${currency}\nОписание:\n${links.join('\n')}\n\n${inviteText}\n\nПоддержка: @AgentNFTDeals`,
     Markup.inlineKeyboard([
       [Markup.button.url('📦 Показать подарок', links[0])],
       [Markup.button.callback('✅ Завершить сделку', `complete_deal_${dealId}`)],
@@ -334,7 +336,7 @@ bot.action('profile', async (ctx) => {
     `- Успешных: ${stats.successful}\n` +
     `- Оборот: ${stats.turnover} ₽\n\n` +
     `Верификация: ${user.verified ? '✅ Пройдена' : '⚙️ Не пройдена'}\n\n` +
-    `Поддержка: @GramHelps`;
+    `Поддержка: @AgentNFTDeals`;
   await ctx.editMessageText(text, { parse_mode: 'HTML', ...profileKeyboard });
 });
 
@@ -428,7 +430,7 @@ bot.action('history', async (ctx) => {
 });
 
 bot.action('support', async (ctx) => {
-  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @GramHelms\n\nМы ответим в ближайшее время.', { parse_mode: 'HTML', ...backToMenuKeyboard });
+  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @AgentNFTDeals\n\nМы ответим в ближайшее время.', { parse_mode: 'HTML', ...backToMenuKeyboard });
 });
 
 bot.action('topup', async (ctx) => {
