@@ -1,546 +1,483 @@
 require('dotenv').config();
-const TelegramBot = require('node-telegram-bot-api');
-const axios = require('axios');
-const { Client } = require('rcon-client');
+const { Telegraf, Markup, session } = require('telegraf');
+const { v4: uuidv4 } = require('uuid');
+const fs = require('fs');
+const path = require('path');
 
-// ========== ТВОИ ДАННЫЕ ==========
-const BOT_TOKEN = '8792137358:AAHMO9wKGVKvXgYsqOz5cSN43xdSpUzrknk';
-const ADMIN_ID = '8579640456';
-const RCON_HOST = process.env.RCON_HOST || '127.0.0.1';
-const RCON_PORT = parseInt(process.env.RCON_PORT) || 7777;
-const RCON_PASSWORD = process.env.RCON_PASSWORD || 'твой_пароль_rcon';
+// ------------------ Инициализация бота ------------------
+const bot = new Telegraf(process.env.TOKEN);
 
-// ========== НАСТРОЙКА КИТОВ С ТВОИМИ ФОТО ==========
-const KITS = {
-    pvp: {
-        id: 'pvp',
-        name: '⚔️ PvP Kit',
-        description: '✅ Броня + AK-47 + M4 + 50.000$',
-        price: 20,
-        emoji: '⚔️',
-        image: 'https://i.postimg.cc/nX3mkwWg/file-1.jpg', // Твоё фото PvP
-        command: '/givekit pvp'
-    },
-    pvp_plus: {
-        id: 'pvp_plus',
-        name: '🔥 PvP+ Kit',
-        description: '✅ Броня + Миниган + Снайперка + 100.000$',
-        price: 35,
-        emoji: '🔥',
-        image: 'https://i.postimg.cc/HrvJ58cY/file-2.jpg', // Твоё фото PvP+
-        command: '/givekit pvpplus'
-    },
-    pvp_plusplus: {
-        id: 'pvp_plusplus',
-        name: '💀 PvP++ Kit',
-        description: '✅ Броня + РПГ + Миниган + 250.000$ + Вип статус',
-        price: 50,
-        emoji: '💀',
-        image: 'https://i.postimg.cc/CBkdWvvZ/file.jpg', // Твоё фото PvP++
-        command: '/givekit pvpplusplus'
-    }
-};
+// ------------------ Хранилище данных (JSON) ------------------
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 
-// ========== ИНИЦИАЛИЗАЦИЯ БОТА ==========
-const bot = new TelegramBot(BOT_TOKEN, { 
-    polling: {
-        interval: 300,
-        autoStart: true,
-        params: {
-            timeout: 10
-        }
-    }
-});
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const DEALS_FILE = path.join(DATA_DIR, 'deals.json');
+const REQUISITES_FILE = path.join(DATA_DIR, 'requisites.json');
 
-console.log('🤖 Бот запущен!');
-console.log(`👤 Админ: ${ADMIN_ID}`);
-console.log(`📦 Китов: ${Object.keys(KITS).length}`);
-
-// ========== ФУНКЦИЯ ОТПРАВКИ КОМАНДЫ НА СЕРВЕР ==========
-async function sendCommandToServer(command, playerName) {
-    try {
-        const client = new Client({
-            host: RCON_HOST,
-            port: RCON_PORT,
-            password: RCON_PASSWORD,
-            timeout: 5000
-        });
-        
-        await client.connect();
-        const fullCommand = `${command} ${playerName}`;
-        const response = await client.send(fullCommand);
-        await client.end();
-        
-        console.log(`✅ RCON: ${fullCommand}`);
-        console.log(`📥 Ответ: ${response}`);
-        return true;
-        
-    } catch (error) {
-        console.error(`❌ RCON ошибка: ${error.message}`);
-        
-        await bot.sendMessage(ADMIN_ID, 
-            `⚠️ НЕ УДАЛОСЬ ВЫДАТЬ КИТ!\n` +
-            `Игрок: ${playerName}\n` +
-            `Команда: ${command} ${playerName}\n` +
-            `Ошибка: ${error.message}`
-        );
-        
-        return false;
-    }
+// Загрузка данных
+function loadData(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return {};
+  }
 }
 
-// ========== ГЛАВНОЕ МЕНЮ (/START) ==========
-bot.onText(/\/start/, async (msg) => {
-    const chatId = msg.chat.id;
-    const firstName = msg.from.first_name || 'Игрок';
-    
-    const text = `🌟 <b>Добро пожаловать, ${firstName}!</b>\n\n` +
-        `💎 <b>Магазин PvP Китов за Telegram Stars</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `💰 <b>Пополни баланс звезд</b> и покупай крутые наборы!\n\n` +
-        `📋 <b>Доступные наборы:</b>\n` +
-        `━━━━━━━━━━━━━━━━━━━━━\n` +
-        `⚔️ PvP Kit — 20 ⭐\n` +
-        `🔥 PvP+ Kit — 35 ⭐\n` +
-        `💀 PvP++ Kit — 50 ⭐\n` +
-        `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `⬇️ <b>Нажми на кнопку ниже, чтобы выбрать кит</b>`;
-    
-    const keyboard = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '⚔️ PvP Kit (20⭐)', callback_data: 'show_pvp' },
-                    { text: '🔥 PvP+ Kit (35⭐)', callback_data: 'show_pvp_plus' }
-                ],
-                [
-                    { text: '💀 PvP++ Kit (50⭐)', callback_data: 'show_pvp_plusplus' }
-                ],
-                [
-                    { text: '📊 Мои покупки', callback_data: 'my_purchases' },
-                    { text: '🆘 Помощь', callback_data: 'help' }
-                ]
-            ]
-        }
+function saveData(file, data) {
+  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+}
+
+// Инициализация пустых файлов
+if (!fs.existsSync(USERS_FILE)) saveData(USERS_FILE, {});
+if (!fs.existsSync(DEALS_FILE)) saveData(DEALS_FILE, {});
+if (!fs.existsSync(REQUISITES_FILE)) saveData(REQUISITES_FILE, {});
+
+// ------------------ Вспомогательные функции ------------------
+function getUser(userId) {
+  const users = loadData(USERS_FILE);
+  if (!users[userId]) {
+    users[userId] = {
+      id: userId,
+      username: null,
+      balance: 0,
+      stats: { total: 0, successful: 0, turnover: 0 },
+      verified: false,
     };
-    
-    bot.sendMessage(chatId, text, { 
-        parse_mode: 'HTML',
-        ...keyboard
+    saveData(USERS_FILE, users);
+  }
+  return users[userId];
+}
+
+function updateUser(userId, data) {
+  const users = loadData(USERS_FILE);
+  users[userId] = { ...users[userId], ...data };
+  saveData(USERS_FILE, users);
+}
+
+function getDeal(dealId) {
+  const deals = loadData(DEALS_FILE);
+  return deals[dealId] || null;
+}
+
+function saveDeal(deal) {
+  const deals = loadData(DEALS_FILE);
+  deals[deal.id] = deal;
+  saveData(DEALS_FILE, deals);
+}
+
+function getUserDeals(userId) {
+  const deals = loadData(DEALS_FILE);
+  return Object.values(deals).filter(d => d.buyerId === userId || d.sellerId === userId);
+}
+
+function getRequisites(userId) {
+  const reqs = loadData(REQUISITES_FILE);
+  return reqs[userId] || { cards: [], tonWallets: [] };
+}
+
+function saveRequisites(userId, reqs) {
+  const all = loadData(REQUISITES_FILE);
+  all[userId] = reqs;
+  saveData(REQUISITES_FILE, all);
+}
+
+// Генерация короткого ID для сделки
+function generateDealId() {
+  return '#' + uuidv4().slice(0, 10);
+}
+
+// ------------------ Сессии ------------------
+bot.use(session({
+  defaultSession: () => ({
+    step: 'idle',       // текущий шаг диалога
+    data: {}            // временные данные
+  })
+}));
+
+// ------------------ Клавиатуры ------------------
+const mainMenuKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('➕ Создать сделку', 'create_deal')],
+  [Markup.button.callback('👤 Профиль', 'profile')],
+  [Markup.button.callback('💳 Реквизиты', 'requisites')],
+  [Markup.button.callback('🔗 Рефералы', 'referrals')],
+  [Markup.button.callback('📜 История сделок', 'history')],
+  [Markup.button.callback('🆘 Поддержка', 'support')]
+]);
+
+const backToMenuKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('🔙 Назад', 'main_menu')]
+]);
+
+const roleKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('🛒 Покупатель', 'role_buyer')],
+  [Markup.button.callback('💼 Продавец', 'role_seller')],
+  [Markup.button.callback('🔙 В меню', 'main_menu')]
+]);
+
+const currencyKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('RUB', 'cur_RUB'), Markup.button.callback('EUR', 'cur_EUR')],
+  [Markup.button.callback('UZS', 'cur_UZS'), Markup.button.callback('KGS', 'cur_KGS')],
+  [Markup.button.callback('KZT', 'cur_KZT'), Markup.button.callback('UAH', 'cur_UAH')],
+  [Markup.button.callback('BYN', 'cur_BYN'), Markup.button.callback('USDT', 'cur_USDT')],
+  [Markup.button.callback('Stars', 'cur_Stars'), Markup.button.callback('GRAM', 'cur_GRAM')],
+  [Markup.button.callback('🔙 Назад', 'create_deal')]
+]);
+
+const profileKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('💰 Пополнить', 'topup'), Markup.button.callback('💸 Вывод', 'withdraw')],
+  [Markup.button.callback('🎫 Промокод', 'promo')],
+  [Markup.button.callback('🔙 Назад', 'main_menu')]
+]);
+
+const requisitesMenuKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('➕ Добавить карту', 'add_card')],
+  [Markup.button.callback('➕ Добавить TON', 'add_ton')],
+  [Markup.button.callback('👁 Посмотреть реквизиты', 'view_requisites')],
+  [Markup.button.callback('🔙 Назад', 'main_menu')]
+]);
+
+// ------------------ Обработчики команд ------------------
+bot.start(async (ctx) => {
+  const text = ctx.message.text;
+  const parts = text.split(' ');
+  const userId = ctx.from.id;
+
+  // Если есть параметр deal_XXX – присоединение к сделке
+  if (parts.length > 1 && parts[1].startsWith('deal_')) {
+    const dealId = parts[1].replace('deal_', '');
+    const deal = getDeal(dealId);
+    if (!deal) {
+      return ctx.reply('❌ Сделка не найдена. Возможно, она уже завершена или удалена.');
+    }
+    // Проверяем, не является ли пользователь уже участником
+    if (deal.buyerId === userId || deal.sellerId === userId) {
+      return ctx.reply('✅ Вы уже участник этой сделки.');
+    }
+    // Если продавец еще не назначен, назначаем текущего пользователя
+    if (!deal.sellerId) {
+      deal.sellerId = userId;
+      deal.sellerUsername = ctx.from.username || `user${userId}`;
+      saveDeal(deal);
+      // Уведомляем покупателя
+      try {
+        await bot.telegram.sendMessage(deal.buyerId, `✅ Продавец @${deal.sellerUsername} присоединился к сделке #${deal.id}`);
+      } catch {}
+      ctx.reply(`✅ Вы присоединились к сделке #${deal.id} как продавец.\nСсылки: ${deal.links.join('\n')}\nСумма: ${deal.amount} ${deal.currency}\n\nСвяжитесь с покупателем для завершения сделки.`, Markup.inlineKeyboard([
+        [Markup.button.url('📦 Показать подарок', deal.links[0])],
+        [Markup.button.callback('✅ Завершить сделку', `complete_deal_${deal.id}`)]
+      ]));
+    } else {
+      ctx.reply('❌ У этой сделки уже есть продавец.');
+    }
+    return;
+  }
+
+  // Обычный старт – приветствие
+  const user = getUser(userId);
+  user.username = ctx.from.username || `user${userId}`;
+  updateUser(userId, { username: user.username });
+
+  ctx.replyWithHTML(
+    `Добро пожаловать в <b>Gram Deals</b>!\n\nСервис, обеспечивающий безопасность и удобство проведения сделок с цифровыми подарками.\n\n🔒 Сервис спонсирован: @gram\n📧 Поддержка: @GramHelps\n\n✔️ Начните работу, нажав кнопку ниже.`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback('🚀 Начать работу', 'main_menu')]
+    ])
+  );
+});
+
+// ------------------ Обработчики callback'ов ------------------
+bot.action('main_menu', async (ctx) => {
+  ctx.session.step = 'idle';
+  ctx.session.data = {};
+  await ctx.editMessageText(
+    `<b>Gram Deals</b>\n\n✅ Гарантируем полную конфиденциальность и безопасность ваших сделок.\n✅ Проект включён в стабильную работу с момента переименования коина TON в GRAM.\n✅ Сделки и техническая поддержка 24/7.\n\n<b>Выберите нужный раздел ниже:</b>`,
+    { parse_mode: 'HTML', ...mainMenuKeyboard }
+  );
+});
+
+// ----- Создание сделки -----
+bot.action('create_deal', async (ctx) => {
+  ctx.session.step = 'create_deal_role';
+  ctx.session.data = {};
+  await ctx.editMessageText(
+    'Выберите роль в сделке:',
+    { ...roleKeyboard }
+  );
+});
+
+// Выбор роли
+bot.action(/^role_(buyer|seller)$/, async (ctx) => {
+  const role = ctx.match[1];
+  ctx.session.data.role = role;
+  ctx.session.step = 'create_deal_links';
+  await ctx.editMessageText(
+    role === 'buyer' 
+      ? 'Создание сделки | Покупатель\n\nВведите ссылку(-и) на подарок(-и):\nФормат: https://... или t.me/...\nПример: t.me/nft/DurovsCap-1\n\nЕсли несколько подарков, каждую ссылку с новой строки:'
+      : 'Создание сделки | Продавец\n\nВведите ссылку(-и) на подарок(-и) (каждая с новой строки):',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('🔙 Назад', 'create_deal')]
+    ])
+  );
+});
+
+// Обработка ввода ссылок (текст)
+bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
+  if (ctx.session.step !== 'create_deal_links') return;
+  const links = ctx.message.text.split('\n').filter(l => l.trim());
+  if (links.length === 0) {
+    return ctx.reply('❌ Пожалуйста, введите хотя бы одну ссылку.');
+  }
+  ctx.session.data.links = links;
+  ctx.session.step = 'create_deal_currency';
+  await ctx.reply('Выберите валюту:', { ...currencyKeyboard });
+});
+
+// Пропускаем неверные сообщения на шаге ссылок
+bot.on('text', async (ctx) => {
+  if (ctx.session.step === 'create_deal_links') {
+    // Если текст не похож на ссылку, просим ввести правильно
+    return ctx.reply('⚠️ Пожалуйста, введите ссылки в формате https://... или t.me/... (каждая с новой строки).');
+  }
+});
+
+// Выбор валюты
+bot.action(/^cur_(.+)$/, async (ctx) => {
+  const currency = ctx.match[1];
+  ctx.session.data.currency = currency;
+  ctx.session.step = 'create_deal_amount';
+  await ctx.editMessageText('Введите сумму (число):', Markup.inlineKeyboard([
+    [Markup.button.callback('🔙 Назад', 'create_deal')]
+  ]));
+});
+
+// Обработка ввода суммы (текст)
+bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
+  if (ctx.session.step !== 'create_deal_amount') return;
+  const amount = parseFloat(ctx.message.text);
+  if (isNaN(amount) || amount <= 0) {
+    return ctx.reply('❌ Введите корректное число (больше 0).');
+  }
+  ctx.session.data.amount = amount;
+  // Создаем сделку
+  const userId = ctx.from.id;
+  const user = getUser(userId);
+  const role = ctx.session.data.role;
+  const links = ctx.session.data.links;
+  const currency = ctx.session.data.currency;
+
+  const dealId = generateDealId();
+  const deal = {
+    id: dealId,
+    buyerId: role === 'buyer' ? userId : null,
+    sellerId: role === 'seller' ? userId : null,
+    buyerUsername: role === 'buyer' ? ctx.from.username || `user${userId}` : null,
+    sellerUsername: role === 'seller' ? ctx.from.username || `user${userId}` : null,
+    links: links,
+    amount: amount,
+    currency: currency,
+    status: 'active', // active, completed, cancelled
+    createdAt: new Date().toISOString(),
+    completedAt: null
+  };
+  saveDeal(deal);
+
+  // Обновляем статистику пользователя
+  const stats = user.stats;
+  stats.total += 1;
+  updateUser(userId, { stats });
+
+  ctx.session.step = 'idle';
+  ctx.session.data = {};
+
+  // Формируем сообщение о создании
+  const roleText = role === 'buyer' ? 'Покупатель' : 'Продавец';
+  const shareLink = `https://t.me/${ctx.botInfo.username}?start=deal_${dealId}`;
+  const inviteText = role === 'buyer' 
+    ? `Ссылка для продавца:\n${shareLink}`
+    : `Ссылка для покупателя:\n${shareLink}`;
+
+  await ctx.replyWithHTML(
+    `<b>Сделка создана!</b>\n\nID сделки: ${dealId}\nВаша роль: ${roleText}\nСумма: ${amount} ${currency}\nОписание:\n${links.join('\n')}\n\n${inviteText}\n\nПоддержка: @GramHelps`,
+    Markup.inlineKeyboard([
+      [Markup.button.url('📦 Показать подарок', links[0])],
+      [Markup.button.callback('✅ Завершить сделку', `complete_deal_${dealId}`)],
+      [Markup.button.callback('🔙 В меню', 'main_menu')]
+    ])
+  );
+});
+
+// ----- Профиль -----
+bot.action('profile', async (ctx) => {
+  const userId = ctx.from.id;
+  const user = getUser(userId);
+  const stats = user.stats;
+  const text = 
+    `<b>Профиль пользователя</b>\n\n` +
+    `Юзер: @${user.username || 'не указан'}\n` +
+    `ID: ${userId}\n\n` +
+    `Баланс:\n${user.balance} ₽\n\n` +
+    `Статистика:\n` +
+    `- Всего сделок: ${stats.total}\n` +
+    `- Успешных: ${stats.successful}\n` +
+    `- Оборот: ${stats.turnover} ₽\n\n` +
+    `Верификация: ${user.verified ? '✅ Пройдена' : '⚙️ Не пройдена'}\n\n` +
+    `Поддержка: @GramHelps`;
+  await ctx.editMessageText(text, { parse_mode: 'HTML', ...profileKeyboard });
+});
+
+// ----- Реквизиты -----
+bot.action('requisites', async (ctx) => {
+  await ctx.editMessageText('Управление реквизитами\n\nВыберите опцию:', { ...requisitesMenuKeyboard });
+});
+
+bot.action('add_card', async (ctx) => {
+  ctx.session.step = 'add_card';
+  await ctx.editMessageText(
+    'Добавить банковскую карту\n\nФормат: Банк - Номер карты\nПример: Сбербанк - 1234 5678 9012 3456\n\nОтправьте реквизиты одним сообщением:',
+    Markup.inlineKeyboard([[Markup.button.callback('🔙 Назад', 'requisites')]])
+  );
+});
+
+bot.action('add_ton', async (ctx) => {
+  ctx.session.step = 'add_ton';
+  await ctx.editMessageText(
+    'Добавить TON кошелек\n\nПример адреса:\nUQAY6fREx6M7QsnCkUJKNptZdRG-Q_1kW2FAa2Am-aBJ-s-7X\n\nОтправьте адрес вашего TON кошелька:',
+    Markup.inlineKeyboard([[Markup.button.callback('🔙 Назад', 'requisites')]])
+  );
+});
+
+bot.action('view_requisites', async (ctx) => {
+  const userId = ctx.from.id;
+  const reqs = getRequisites(userId);
+  let text = '📋 <b>Ваши реквизиты</b>\n\n';
+  if (reqs.cards.length === 0 && reqs.tonWallets.length === 0) {
+    text += 'У вас пока нет сохранённых реквизитов.';
+  } else {
+    if (reqs.cards.length) {
+      text += '<b>Банковские карты:</b>\n';
+      reqs.cards.forEach((c, i) => text += `${i+1}. ${c.bank} - ${c.number}\n`);
+      text += '\n';
+    }
+    if (reqs.tonWallets.length) {
+      text += '<b>TON кошельки:</b>\n';
+      reqs.tonWallets.forEach((w, i) => text += `${i+1}. ${w.address}\n`);
+    }
+  }
+  await ctx.editMessageText(text, { parse_mode: 'HTML', ...backToMenuKeyboard });
+});
+
+// Обработка ввода карты
+bot.on('text', async (ctx) => {
+  if (ctx.session.step === 'add_card') {
+    const text = ctx.message.text;
+    const parts = text.split(' - ');
+    if (parts.length !== 2) {
+      return ctx.reply('❌ Неверный формат. Используйте: Банк - Номер карты');
+    }
+    const userId = ctx.from.id;
+    const reqs = getRequisites(userId);
+    reqs.cards.push({ bank: parts[0].trim(), number: parts[1].trim() });
+    saveRequisites(userId, reqs);
+    ctx.session.step = 'idle';
+    await ctx.reply('✅ Карта добавлена!', { ...backToMenuKeyboard });
+    return;
+  }
+
+  if (ctx.session.step === 'add_ton') {
+    const address = ctx.message.text.trim();
+    if (!address.startsWith('UQ') && !address.startsWith('EQ')) {
+      return ctx.reply('❌ Адрес должен начинаться с UQ или EQ. Попробуйте снова.');
+    }
+    const userId = ctx.from.id;
+    const reqs = getRequisites(userId);
+    reqs.tonWallets.push({ address });
+    saveRequisites(userId, reqs);
+    ctx.session.step = 'idle';
+    await ctx.reply('✅ TON кошелек добавлен!', { ...backToMenuKeyboard });
+    return;
+  }
+});
+
+// ----- Рефералы (заглушка) -----
+bot.action('referrals', async (ctx) => {
+  await ctx.editMessageText('🔗 <b>Реферальная система</b>\n\nСкоро здесь появится программа лояльности. Следите за обновлениями!', { parse_mode: 'HTML', ...backToMenuKeyboard });
+});
+
+// ----- История сделок -----
+bot.action('history', async (ctx) => {
+  const userId = ctx.from.id;
+  const deals = getUserDeals(userId);
+  if (deals.length === 0) {
+    await ctx.editMessageText('📜 <b>История сделок</b>\n\nУ вас пока нет сделок.', { parse_mode: 'HTML', ...backToMenuKeyboard });
+  } else {
+    let text = '📜 <b>Ваши сделки</b>\n\n';
+    deals.forEach((d, i) => {
+      text += `${i+1}. ID: ${d.id}\nРоль: ${d.buyerId === userId ? 'Покупатель' : 'Продавец'}\nСумма: ${d.amount} ${d.currency}\nСтатус: ${d.status}\nДата: ${new Date(d.createdAt).toLocaleString()}\n\n`;
     });
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...backToMenuKeyboard });
+  }
 });
 
-// ========== ПОКАЗ КИТА С ФОТО ==========
-async function showKit(chatId, kitKey) {
-    const kit = KITS[kitKey];
-    if (!kit) return;
-    
-    const caption = `📦 <b>${kit.name}</b>\n\n` +
-        `${kit.description}\n\n` +
-        `💰 <b>Цена:</b> ${kit.price} ⭐\n` +
-        `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-        `⬇️ <b>Нажми кнопку "Купить" для оплаты</b>`;
-    
-    const keyboard = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: `💎 Купить за ${kit.price} ⭐`, callback_data: `buy_${kitKey}` }
-                ],
-                [
-                    { text: '⬅️ Назад в меню', callback_data: 'back_to_menu' }
-                ]
-            ]
-        }
-    };
-    
+// ----- Поддержка -----
+bot.action('support', async (ctx) => {
+  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @GramHelps\n\nМы ответим в ближайшее время.', { parse_mode: 'HTML', ...backToMenuKeyboard });
+});
+
+// ----- Пополнение / Вывод (заглушки) -----
+bot.action('topup', async (ctx) => {
+  await ctx.answerCbQuery('💰 Функция пополнения в разработке.');
+});
+bot.action('withdraw', async (ctx) => {
+  await ctx.answerCbQuery('💸 Функция вывода в разработке.');
+});
+bot.action('promo', async (ctx) => {
+  await ctx.answerCbQuery('🎫 Промокоды появятся позже.');
+});
+
+// ----- Завершение сделки (для демонстрации) -----
+bot.action(/^complete_deal_(.+)$/, async (ctx) => {
+  const dealId = ctx.match[1];
+  const deal = getDeal(dealId);
+  if (!deal) return ctx.reply('❌ Сделка не найдена.');
+  if (deal.status === 'completed') return ctx.reply('✅ Эта сделка уже завершена.');
+  // Проверяем, что пользователь участник
+  const userId = ctx.from.id;
+  if (deal.buyerId !== userId && deal.sellerId !== userId) {
+    return ctx.reply('❌ Вы не участник этой сделки.');
+  }
+  // Обновляем статус
+  deal.status = 'completed';
+  deal.completedAt = new Date().toISOString();
+  saveDeal(deal);
+
+  // Обновляем статистику обоих участников
+  const buyer = getUser(deal.buyerId);
+  const seller = getUser(deal.sellerId);
+  buyer.stats.successful += 1;
+  buyer.stats.turnover += deal.amount;
+  seller.stats.successful += 1;
+  seller.stats.turnover += deal.amount;
+  updateUser(deal.buyerId, { stats: buyer.stats });
+  updateUser(deal.sellerId, { stats: seller.stats });
+
+  await ctx.reply(`✅ Сделка #${dealId} успешно завершена! Спасибо, что воспользовались Gram Deals.`, { ...backToMenuKeyboard });
+  // Уведомляем другого участника
+  const otherId = deal.buyerId === userId ? deal.sellerId : deal.buyerId;
+  if (otherId) {
     try {
-        await bot.sendPhoto(chatId, kit.image, {
-            caption: caption,
-            parse_mode: 'HTML',
-            ...keyboard
-        });
-    } catch (error) {
-        console.error('Ошибка отправки фото:', error.message);
-        await bot.sendMessage(chatId, 
-            `📦 ${kit.name}\n\n${kit.description}\n\n💰 Цена: ${kit.price} ⭐`,
-            keyboard
-        );
-    }
-}
-
-// ========== ОБРАБОТЧИК КНОПОК ==========
-bot.on('callback_query', async (callbackQuery) => {
-    const action = callbackQuery.data;
-    const chatId = callbackQuery.message.chat.id;
-    const userId = callbackQuery.from.id;
-    const messageId = callbackQuery.message.message_id;
-    
-    if (action === 'show_pvp') {
-        await showKit(chatId, 'pvp');
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
-    
-    if (action === 'show_pvp_plus') {
-        await showKit(chatId, 'pvp_plus');
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
-    
-    if (action === 'show_pvp_plusplus') {
-        await showKit(chatId, 'pvp_plusplus');
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
-    
-    if (action.startsWith('buy_')) {
-        const kitKey = action.replace('buy_', '');
-        const kit = KITS[kitKey];
-        
-        if (kit) {
-            await createInvoice(chatId, userId, kit, kitKey);
-        }
-        
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
-    
-    if (action === 'back_to_menu') {
-        try {
-            await bot.deleteMessage(chatId, messageId);
-        } catch (e) {}
-        
-        const firstName = callbackQuery.from.first_name || 'Игрок';
-        const text = `🌟 <b>Добро пожаловать, ${firstName}!</b>\n\n` +
-            `💎 <b>Магазин PvP Китов за Telegram Stars</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `💰 <b>Пополни баланс звезд</b> и покупай крутые наборы!\n\n` +
-            `📋 <b>Доступные наборы:</b>\n` +
-            `━━━━━━━━━━━━━━━━━━━━━\n` +
-            `⚔️ PvP Kit — 20 ⭐\n` +
-            `🔥 PvP+ Kit — 35 ⭐\n` +
-            `💀 PvP++ Kit — 50 ⭐\n` +
-            `━━━━━━━━━━━━━━━━━━━━━\n\n` +
-            `⬇️ <b>Нажми на кнопку ниже, чтобы выбрать кит</b>`;
-        
-        const keyboard = {
-            reply_markup: {
-                inline_keyboard: [
-                    [
-                        { text: '⚔️ PvP Kit (20⭐)', callback_data: 'show_pvp' },
-                        { text: '🔥 PvP+ Kit (35⭐)', callback_data: 'show_pvp_plus' }
-                    ],
-                    [
-                        { text: '💀 PvP++ Kit (50⭐)', callback_data: 'show_pvp_plusplus' }
-                    ],
-                    [
-                        { text: '📊 Мои покупки', callback_data: 'my_purchases' },
-                        { text: '🆘 Помощь', callback_data: 'help' }
-                    ]
-                ]
-            }
-        };
-        
-        await bot.sendMessage(chatId, text, { 
-            parse_mode: 'HTML',
-            ...keyboard
-        });
-        
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
-    
-    if (action === 'my_purchases') {
-        await bot.sendMessage(chatId, 
-            `📊 <b>История покупок</b>\n\n` +
-            `У тебя пока нет покупок.\n` +
-            `Купи свой первый кит прямо сейчас! 💎\n\n` +
-            `⬇️ Нажми на кнопку "Назад в меню"`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '⬅️ Назад в меню', callback_data: 'back_to_menu' }]
-                    ]
-                }
-            }
-        );
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
-    
-    if (action === 'help') {
-        await bot.sendMessage(chatId, 
-            `🆘 <b>Помощь</b>\n\n` +
-            `1️⃣ Выбери кит из списка\n` +
-            `2️⃣ Нажми "Купить" и оплати звездами\n` +
-            `3️⃣ Получи набор на сервере!\n\n` +
-            `📌 <b>Команды:</b>\n` +
-            `/start - Главное меню\n` +
-            `/kits - Все киты\n` +
-            `/help - Эта справка\n\n` +
-            `⚠️ Если набор не пришел - напиши админу!`,
-            {
-                parse_mode: 'HTML',
-                reply_markup: {
-                    inline_keyboard: [
-                        [{ text: '⬅️ Назад в меню', callback_data: 'back_to_menu' }]
-                    ]
-                }
-            }
-        );
-        await bot.answerCallbackQuery(callbackQuery.id);
-        return;
-    }
+      await bot.telegram.sendMessage(otherId, `✅ Сделка #${dealId} завершена пользователем @${ctx.from.username}.`);
+    } catch {}
+  }
 });
 
-// ========== ФУНКЦИЯ СОЗДАНИЯ ИНВОЙСА ==========
-async function createInvoice(chatId, userId, kit, kitKey) {
-    try {
-        const invoice = {
-            chat_id: chatId,
-            title: kit.name,
-            description: kit.description,
-            payload: JSON.stringify({
-                kit: kitKey,
-                userId: userId,
-                timestamp: Date.now()
-            }),
-            provider_token: '',
-            currency: 'XTR',
-            prices: [
-                { label: kit.name, amount: kit.price }
-            ],
-            start_parameter: 'buy_' + kitKey,
-            photo_url: kit.image,
-            photo_size: 100,
-            photo_width: 100,
-            photo_height: 100,
-            need_name: false,
-            need_phone_number: false,
-            need_email: false,
-            need_shipping_address: false,
-            is_flexible: false
-        };
-        
-        await bot.sendInvoice(
-            invoice.chat_id,
-            invoice.title,
-            invoice.description,
-            invoice.payload,
-            invoice.provider_token,
-            invoice.currency,
-            invoice.prices,
-            {
-                start_parameter: invoice.start_parameter,
-                photo_url: invoice.photo_url,
-                photo_size: invoice.photo_size,
-                photo_width: invoice.photo_width,
-                photo_height: invoice.photo_height,
-                need_name: invoice.need_name,
-                need_phone_number: invoice.need_phone_number,
-                need_email: invoice.need_email,
-                need_shipping_address: invoice.need_shipping_address,
-                is_flexible: invoice.is_flexible
-            }
-        );
-        
-        console.log(`💰 Счет создан: ${kit.name} для пользователя ${userId}`);
-        
-    } catch (error) {
-        console.error('❌ Ошибка создания инвойса:', error);
-        await bot.sendMessage(chatId, 
-            '❌ Ошибка создания платежа. Попробуй позже.'
-        );
-    }
-}
-
-// ========== КОМАНДА /KITS ==========
-bot.onText(/\/kits/, (msg) => {
-    const chatId = msg.chat.id;
-    
-    let text = `📦 <b>Все PvP Киты:</b>\n\n`;
-    
-    for (const [key, kit] of Object.entries(KITS)) {
-        text += `${kit.emoji} <b>${kit.name}</b>\n`;
-        text += `   💰 ${kit.price} ⭐\n`;
-        text += `   📝 ${kit.description}\n`;
-        text += `   ───────────────\n\n`;
-    }
-    
-    text += `⬇️ <b>Нажми на кнопку чтобы купить</b>`;
-    
-    const keyboard = {
-        reply_markup: {
-            inline_keyboard: [
-                [
-                    { text: '⚔️ PvP Kit (20⭐)', callback_data: 'show_pvp' },
-                    { text: '🔥 PvP+ Kit (35⭐)', callback_data: 'show_pvp_plus' }
-                ],
-                [
-                    { text: '💀 PvP++ Kit (50⭐)', callback_data: 'show_pvp_plusplus' }
-                ],
-                [
-                    { text: '⬅️ Назад в меню', callback_data: 'back_to_menu' }
-                ]
-            ]
-        }
-    };
-    
-    bot.sendMessage(chatId, text, { 
-        parse_mode: 'HTML',
-        ...keyboard
-    });
+// ------------------ Запуск бота ------------------
+bot.launch().then(() => {
+  console.log('Бот Gram Deals запущен!');
+}).catch(err => {
+  console.error('Ошибка запуска:', err);
 });
 
-// ========== КОМАНДА /HELP ==========
-bot.onText(/\/help/, (msg) => {
-    const chatId = msg.chat.id;
-    
-    bot.sendMessage(chatId, 
-        `🆘 <b>Помощь</b>\n\n` +
-        `1️⃣ Выбери кит из списка\n` +
-        `2️⃣ Нажми "Купить" и оплати звездами\n` +
-        `3️⃣ Получи набор на сервере!\n\n` +
-        `📌 <b>Команды:</b>\n` +
-        `/start - Главное меню\n` +
-        `/kits - Все киты\n` +
-        `/help - Эта справка\n\n` +
-        `⚠️ Если набор не пришел - напиши админу!`,
-        { parse_mode: 'HTML' }
-    );
-});
-
-// ========== ПОДТВЕРЖДЕНИЕ ПЛАТЕЖА ==========
-bot.on('pre_checkout_query', async (query) => {
-    try {
-        await bot.answerPreCheckoutQuery(query.id, true, '✅ Оплата принята!');
-        console.log(`✅ PreCheckout: ${query.from.username} - ${query.invoice_payload}`);
-    } catch (error) {
-        console.error('❌ PreCheckout ошибка:', error);
-        await bot.answerPreCheckoutQuery(query.id, false, '❌ Ошибка оплаты');
-    }
-});
-
-// ========== УСПЕШНАЯ ОПЛАТА ==========
-bot.on('successful_payment', async (msg) => {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const username = msg.from.username || msg.from.first_name;
-    const payment = msg.successful_payment;
-    
-    try {
-        const payload = JSON.parse(payment.payload);
-        const kitKey = payload.kit;
-        const kit = KITS[kitKey];
-        
-        if (!kit) {
-            console.error('❌ Неизвестный кит:', kitKey);
-            await bot.sendMessage(chatId, '❌ Ошибка: неизвестный кит. Обратись к админу.');
-            return;
-        }
-        
-        console.log(`💎 Успешная оплата:`);
-        console.log(`   Игрок: ${username} (ID: ${userId})`);
-        console.log(`   Кит: ${kit.name}`);
-        console.log(`   Цена: ${payment.total_amount} ⭐`);
-        console.log(`   ID платежа: ${payment.telegram_payment_charge_id}`);
-        
-        await bot.sendMessage(chatId, 
-            `⏳ <b>Обработка платежа...</b>\n\n` +
-            `📦 ${kit.emoji} ${kit.name}\n` +
-            `💰 Списано: ${payment.total_amount} ⭐\n` +
-            `👤 Игрок: ${username}\n\n` +
-            `🔄 Выдача на сервер...`,
-            { parse_mode: 'HTML' }
-        );
-        
-        const success = await sendCommandToServer(kit.command, username);
-        
-        if (success) {
-            await bot.sendMessage(chatId, 
-                `✅ <b>Набор успешно выдан!</b>\n\n` +
-                `📦 ${kit.emoji} ${kit.name}\n` +
-                `👤 Игрок: ${username}\n` +
-                `⭐ Списано: ${payment.total_amount}\n` +
-                `🆔 Платеж: ${payment.telegram_payment_charge_id.slice(0, 10)}...\n\n` +
-                `🎮 <b>Заходи на сервер и получай набор!</b>`,
-                { parse_mode: 'HTML' }
-            );
-            
-            await bot.sendMessage(ADMIN_ID, 
-                `✅ <b>Успешная выдача!</b>\n\n` +
-                `👤 Игрок: ${username} (ID: ${userId})\n` +
-                `📦 Кит: ${kit.name}\n` +
-                `⭐ Цена: ${payment.total_amount} звезд\n` +
-                `🆔 Платеж: ${payment.telegram_payment_charge_id}\n` +
-                `📅 Время: ${new Date().toLocaleString()}`,
-                { parse_mode: 'HTML' }
-            );
-            
-        } else {
-            await bot.sendMessage(chatId, 
-                `⚠️ <b>Ошибка выдачи набора!</b>\n\n` +
-                `Деньги списаны (${payment.total_amount} ⭐), но набор не выдан.\n\n` +
-                `📌 <b>Что делать?</b>\n` +
-                `1️⃣ Напиши админу\n` +
-                `2️⃣ Укажи ID платежа: ${payment.telegram_payment_charge_id}\n` +
-                `3️⃣ Админ выдаст набор вручную\n\n` +
-                `Приносим извинения за неудобства! 🙏`,
-                { parse_mode: 'HTML' }
-            );
-            
-            await bot.sendMessage(ADMIN_ID, 
-                `🚨 <b>ОШИБКА ВЫДАЧИ КИТА!</b>\n\n` +
-                `👤 Игрок: ${username} (ID: ${userId})\n` +
-                `📦 Кит: ${kit.name}\n` +
-                `⭐ Сумма: ${payment.total_amount} звезд\n` +
-                `🆔 Платеж: ${payment.telegram_payment_charge_id}\n` +
-                `📅 Время: ${new Date().toLocaleString()}\n\n` +
-                `⚠️ <b>Нужно выдать вручную!</b>`,
-                { parse_mode: 'HTML' }
-            );
-        }
-        
-    } catch (error) {
-        console.error('❌ Ошибка обработки платежа:', error);
-        await bot.sendMessage(chatId, 
-            '❌ Произошла ошибка при обработке платежа.\n' +
-            'Напиши админу и укажи ID платежа: ' + payment.telegram_payment_charge_id
-        );
-        
-        await bot.sendMessage(ADMIN_ID, 
-            `❌ КРИТИЧЕСКАЯ ОШИБКА!\n` +
-            `Платеж: ${payment.telegram_payment_charge_id}\n` +
-            `Ошибка: ${error.message}`
-        );
-    }
-});
-
-// ========== ЛОГИРОВАНИЕ ==========
-bot.on('message', (msg) => {
-    if (msg.text && !msg.text.startsWith('/')) {
-        console.log(`💬 Сообщение от ${msg.from.username}: ${msg.text}`);
-    }
-});
-
-// ========== ОБРАБОТЧИК ОШИБОК ==========
-bot.on('polling_error', (error) => {
-    console.error('❌ Ошибка поллинга:', error);
-});
-
-process.on('unhandledRejection', (error) => {
-    console.error('❌ Необработанное отклонение:', error);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('❌ Непойманное исключение:', error);
-});
-
-console.log('✅ Бот успешно запущен!');
-console.log('📋 Доступные команды:');
-for (const [key, kit] of Object.entries(KITS)) {
-    console.log(`   /${key} - ${kit.name} (${kit.price} ⭐)`);
-}
-console.log('━━━━━━━━━━━━━━━━━━━━━');
+// Graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
