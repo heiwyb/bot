@@ -5,7 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 
-// ------------------ Проверка токена ------------------
+// ------------------ ПРОВЕРКА ТОКЕНА ------------------
 const TOKEN = process.env.TOKEN;
 if (!TOKEN) {
   console.error('❌ Токен не найден в .env!');
@@ -13,15 +13,20 @@ if (!TOKEN) {
 }
 console.log('✅ Токен загружен');
 
-// ------------------ Инициализация бота ------------------
+// ------------------ ИНИЦИАЛИЗАЦИЯ БОТА ------------------
 const bot = new Telegraf(TOKEN);
 
-// ------------------ Удаляем webhook ------------------
-bot.telegram.deleteWebhook().then(() => {
-  console.log('✅ Webhook удалён');
-}).catch(err => console.error('⚠️ Ошибка удаления webhook:', err.message));
+// ------------------ УДАЛЕНИЕ WEBHOOK С ОЖИДАНИЕМ ------------------
+(async () => {
+  try {
+    const result = await bot.telegram.deleteWebhook();
+    console.log('✅ Webhook удалён:', result);
+  } catch (err) {
+    console.error('⚠️ Ошибка удаления webhook:', err.message);
+  }
+})();
 
-// ------------------ Логирование всех событий ------------------
+// ------------------ ЛОГИРОВАНИЕ ------------------
 bot.use(async (ctx, next) => {
   const type = ctx.updateType;
   let data = '';
@@ -31,9 +36,10 @@ bot.use(async (ctx, next) => {
   await next();
 });
 
-// ------------------ Хранилище данных ------------------
+// ------------------ ХРАНИЛИЩЕ ------------------
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const DEALS_FILE = path.join(DATA_DIR, 'deals.json');
 const REQUISITES_FILE = path.join(DATA_DIR, 'requisites.json');
@@ -48,50 +54,68 @@ if (!fs.existsSync(USERS_FILE)) saveData(USERS_FILE, {});
 if (!fs.existsSync(DEALS_FILE)) saveData(DEALS_FILE, {});
 if (!fs.existsSync(REQUISITES_FILE)) saveData(REQUISITES_FILE, {});
 
-// ------------------ Вспомогательные функции ------------------
+// ------------------ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ------------------
 function getUser(userId) {
   const users = loadData(USERS_FILE);
   if (!users[userId]) {
-    users[userId] = { id: userId, username: null, balance: 0, stats: { total: 0, successful: 0, turnover: 0 }, verified: false };
+    users[userId] = {
+      id: userId,
+      username: null,
+      balance: 0,
+      stats: { total: 0, successful: 0, turnover: 0 },
+      verified: false,
+    };
     saveData(USERS_FILE, users);
   }
   return users[userId];
 }
+
 function updateUser(userId, data) {
   const users = loadData(USERS_FILE);
   users[userId] = { ...users[userId], ...data };
   saveData(USERS_FILE, users);
 }
+
 function getDeal(dealId) {
   const deals = loadData(DEALS_FILE);
   return deals[dealId] || null;
 }
+
 function saveDeal(deal) {
   const deals = loadData(DEALS_FILE);
   deals[deal.id] = deal;
   saveData(DEALS_FILE, deals);
 }
+
 function getUserDeals(userId) {
   const deals = loadData(DEALS_FILE);
   return Object.values(deals).filter(d => d.buyerId === userId || d.sellerId === userId);
 }
+
 function getRequisites(userId) {
   const reqs = loadData(REQUISITES_FILE);
   return reqs[userId] || { cards: [], tonWallets: [] };
 }
+
 function saveRequisites(userId, reqs) {
   const all = loadData(REQUISITES_FILE);
   all[userId] = reqs;
   saveData(REQUISITES_FILE, all);
 }
+
 function generateDealId() {
   return '#' + uuidv4().slice(0, 10);
 }
 
-// ------------------ Сессии ------------------
-bot.use(session({ defaultSession: () => ({ step: 'idle', data: {} }) }));
+// ------------------ СЕССИИ ------------------
+bot.use(session({
+  defaultSession: () => ({
+    step: 'idle',
+    data: {}
+  })
+}));
 
-// ------------------ Клавиатуры ------------------
+// ------------------ КЛАВИАТУРЫ ------------------
 const mainMenuKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('➕ Создать сделку', 'create_deal')],
   [Markup.button.callback('👤 Профиль', 'profile')],
@@ -100,12 +124,17 @@ const mainMenuKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('📜 История сделок', 'history')],
   [Markup.button.callback('🆘 Поддержка', 'support')]
 ]);
-const backToMenuKeyboard = Markup.inlineKeyboard([[Markup.button.callback('🔙 Назад', 'main_menu')]]);
+
+const backToMenuKeyboard = Markup.inlineKeyboard([
+  [Markup.button.callback('🔙 Назад', 'main_menu')]
+]);
+
 const roleKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('🛒 Покупатель', 'role_buyer')],
   [Markup.button.callback('💼 Продавец', 'role_seller')],
   [Markup.button.callback('🔙 В меню', 'main_menu')]
 ]);
+
 const currencyKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('RUB', 'cur_RUB'), Markup.button.callback('EUR', 'cur_EUR')],
   [Markup.button.callback('UZS', 'cur_UZS'), Markup.button.callback('KGS', 'cur_KGS')],
@@ -114,11 +143,13 @@ const currencyKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('Stars', 'cur_Stars'), Markup.button.callback('GRAM', 'cur_GRAM')],
   [Markup.button.callback('🔙 Назад', 'create_deal')]
 ]);
+
 const profileKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('💰 Пополнить', 'topup'), Markup.button.callback('💸 Вывод', 'withdraw')],
   [Markup.button.callback('🎫 Промокод', 'promo')],
   [Markup.button.callback('🔙 Назад', 'main_menu')]
 ]);
+
 const requisitesMenuKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('➕ Добавить карту', 'add_card')],
   [Markup.button.callback('➕ Добавить TON', 'add_ton')],
@@ -126,7 +157,14 @@ const requisitesMenuKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('🔙 Назад', 'main_menu')]
 ]);
 
-// ------------------ Обработчики команд ------------------
+// ------------------ КОМАНДА /CANCEL ------------------
+bot.command('cancel', async (ctx) => {
+  ctx.session.step = 'idle';
+  ctx.session.data = {};
+  await ctx.reply('✅ Действие отменено.', { ...backToMenuKeyboard });
+});
+
+// ------------------ /START ------------------
 bot.start(async (ctx) => {
   console.log('✅ /start от', ctx.from.id);
   const text = ctx.message.text;
@@ -143,12 +181,14 @@ bot.start(async (ctx) => {
       deal.sellerUsername = ctx.from.username || `user${userId}`;
       saveDeal(deal);
       try { await bot.telegram.sendMessage(deal.buyerId, `✅ Продавец @${deal.sellerUsername} присоединился к сделке #${deal.id}`); } catch {}
-      ctx.reply(`✅ Вы присоединились к сделке #${deal.id} как продавец.\nСсылки: ${deal.links.join('\n')}\nСумма: ${deal.amount} ${deal.currency}`, Markup.inlineKeyboard([
-        [Markup.button.url('📦 Показать подарок', deal.links[0])],
-        [Markup.button.callback('✅ Завершить сделку', `complete_deal_${deal.id}`)]
-      ]));
-    } else ctx.reply('❌ У сделки уже есть продавец.');
-    return;
+      return ctx.reply(
+        `✅ Вы присоединились к сделке #${deal.id}.\nСсылки: ${deal.links.join('\n')}\nСумма: ${deal.amount} ${deal.currency}`,
+        Markup.inlineKeyboard([
+          [Markup.button.url('📦 Показать подарок', deal.links[0])],
+          [Markup.button.callback('✅ Завершить сделку', `complete_deal_${deal.id}`)]
+        ])
+      );
+    } else return ctx.reply('❌ У сделки уже есть продавец.');
   }
 
   const user = getUser(userId);
@@ -161,7 +201,7 @@ bot.start(async (ctx) => {
   );
 });
 
-// ------------------ Обработчики callback'ов ------------------
+// ------------------ CALLBACK'И ------------------
 bot.action('main_menu', async (ctx) => {
   ctx.session.step = 'idle';
   ctx.session.data = {};
@@ -189,7 +229,6 @@ bot.action(/^role_(buyer|seller)$/, async (ctx) => {
   );
 });
 
-// Обработка ссылок
 bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
   if (ctx.session.step !== 'create_deal_links') return;
   const links = ctx.message.text.split('\n').filter(l => l.trim());
@@ -199,42 +238,33 @@ bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
   await ctx.reply('Выберите валюту:', { ...currencyKeyboard });
 });
 
-// Выбор валюты
 bot.action(/^cur_(.+)$/, async (ctx) => {
   const currency = ctx.match[1];
   ctx.session.data.currency = currency;
   ctx.session.step = 'create_deal_amount';
-  await ctx.editMessageText('Введите сумму (число):', Markup.inlineKeyboard([
-    [Markup.button.callback('🔙 Назад', 'create_deal')]
-  ]));
+  await ctx.editMessageText('Введите сумму (число):', Markup.inlineKeyboard([[Markup.button.callback('🔙 Назад', 'create_deal')]]));
 });
 
-// ================== ГЛАВНЫЙ ОБРАБОТЧИК ТЕКСТА ==================
+// ================== ОСНОВНОЙ ОБРАБОТЧИК ТЕКСТА ==================
 bot.on('text', async (ctx) => {
   const text = ctx.message.text.trim();
   const step = ctx.session.step;
   console.log(`📝 Текст от ${ctx.from.id}, шаг: ${step}, текст: "${text}"`);
 
-  // ---------- ВВОД СУММЫ ----------
+  // ----- ВВОД СУММЫ -----
   if (step === 'create_deal_amount') {
     const amount = parseFloat(text);
     if (isNaN(amount) || amount <= 0) {
       return ctx.reply('❌ Введите корректное число (больше 0).');
     }
-    ctx.session.data.amount = amount;
+    const { role, links, currency } = ctx.session.data;
+    if (!role || !links || !currency) {
+      ctx.session.step = 'idle';
+      return ctx.reply('⚠️ Ошибка данных. Начните заново.', { ...backToMenuKeyboard });
+    }
 
     const userId = ctx.from.id;
     const user = getUser(userId);
-    const role = ctx.session.data.role;
-    const links = ctx.session.data.links;
-    const currency = ctx.session.data.currency;
-
-    // Проверка, что все данные есть
-    if (!role || !links || !currency) {
-      ctx.session.step = 'idle';
-      return ctx.reply('⚠️ Что-то пошло не так. Начните создание сделки заново.', { ...backToMenuKeyboard });
-    }
-
     const dealId = generateDealId();
     const deal = {
       id: dealId,
@@ -248,9 +278,8 @@ bot.on('text', async (ctx) => {
       completedAt: null
     };
     saveDeal(deal);
-    const stats = user.stats;
-    stats.total += 1;
-    updateUser(userId, { stats });
+    user.stats.total += 1;
+    updateUser(userId, { stats: user.stats });
 
     ctx.session.step = 'idle';
     ctx.session.data = {};
@@ -272,7 +301,7 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // ---------- ДОБАВЛЕНИЕ КАРТЫ ----------
+  // ----- ДОБАВЛЕНИЕ КАРТЫ -----
   if (step === 'add_card') {
     const parts = text.split(' - ');
     if (parts.length !== 2) return ctx.reply('❌ Формат: Банк - Номер карты');
@@ -285,7 +314,7 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // ---------- ДОБАВЛЕНИЕ TON ----------
+  // ----- ДОБАВЛЕНИЕ TON -----
   if (step === 'add_ton') {
     const address = text;
     if (!address.startsWith('UQ') && !address.startsWith('EQ')) {
@@ -300,25 +329,26 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // ---------- ЕСЛИ НА ШАГЕ ССЫЛОК ПРИСЛАЛИ НЕ ССЫЛКУ ----------
+  // ----- НЕПРАВИЛЬНЫЙ ВВОД НА ШАГЕ ССЫЛОК -----
   if (step === 'create_deal_links') {
-    return ctx.reply('⚠️ Введите ссылки в формате https://... или t.me/... (каждая с новой строки).');
+    return ctx.reply('⚠️ Введите ссылки в формате https://... или t.me/...');
   }
 
-  // ---------- ПОДСКАЗКА ДЛЯ IDLE ----------
+  // ----- ПОДСКАЗКА ДЛЯ IDLE -----
   if (step === 'idle' && !text.startsWith('/')) {
-    await ctx.reply('ℹ️ Используйте /start или кнопки меню.');
+    await ctx.reply('ℹ️ Используйте /start или кнопки меню. Для отмены – /cancel');
   }
 });
 
-// ---------- Остальные обработчики ----------
+// ------------------ ОСТАЛЬНЫЕ CALLBACK'И ------------------
 bot.action('profile', async (ctx) => {
   const userId = ctx.from.id;
   const user = getUser(userId);
   const stats = user.stats;
-  const text =
-    `<b>Профиль пользователя</b>\n\nЮзер: @${user.username || 'не указан'}\nID: ${userId}\n\nБаланс: ${user.balance} ₽\n\nСтатистика:\n- Всего сделок: ${stats.total}\n- Успешных: ${stats.successful}\n- Оборот: ${stats.turnover} ₽\n\nВерификация: ${user.verified ? '✅ Пройдена' : '⚙️ Не пройдена'}\n\nПоддержка: @AgentNFTDeals`;
-  await ctx.editMessageText(text, { parse_mode: 'HTML', ...profileKeyboard });
+  await ctx.editMessageText(
+    `<b>Профиль пользователя</b>\n\nЮзер: @${user.username || 'не указан'}\nID: ${userId}\n\nБаланс: ${user.balance} ₽\n\nСтатистика:\n- Всего сделок: ${stats.total}\n- Успешных: ${stats.successful}\n- Оборот: ${stats.turnover} ₽\n\nВерификация: ${user.verified ? '✅ Пройдена' : '⚙️ Не пройдена'}\n\nПоддержка: @AgentNFTDeals`,
+    { parse_mode: 'HTML', ...profileKeyboard }
+  );
 });
 
 bot.action('requisites', async (ctx) => {
@@ -379,7 +409,7 @@ bot.action('history', async (ctx) => {
 });
 
 bot.action('support', async (ctx) => {
-  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @AgentNFTDeals\n\nМы ответим в ближайшее время.', { parse_mode: 'HTML', ...backToMenuKeyboard });
+  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @AgentNFTDeals', { parse_mode: 'HTML', ...backToMenuKeyboard });
 });
 
 bot.action('topup', async (ctx) => ctx.answerCbQuery('💰 В разработке'));
@@ -390,7 +420,7 @@ bot.action(/^complete_deal_(.+)$/, async (ctx) => {
   const dealId = ctx.match[1];
   const deal = getDeal(dealId);
   if (!deal) return ctx.reply('❌ Сделка не найдена.');
-  if (deal.status === 'completed') return ctx.reply('✅ Сделка уже завершена.');
+  if (deal.status === 'completed') return ctx.reply('✅ Уже завершена.');
   const userId = ctx.from.id;
   if (deal.buyerId !== userId && deal.sellerId !== userId) return ctx.reply('❌ Вы не участник.');
   deal.status = 'completed';
@@ -406,14 +436,17 @@ bot.action(/^complete_deal_(.+)$/, async (ctx) => {
   updateUser(deal.buyerId, { stats: buyer.stats });
   updateUser(deal.sellerId, { stats: seller.stats });
 
-  await ctx.reply(`✅ Сделка #${dealId} завершена! Спасибо.`, { ...backToMenuKeyboard });
+  await ctx.reply(`✅ Сделка #${dealId} завершена!`, { ...backToMenuKeyboard });
   const otherId = deal.buyerId === userId ? deal.sellerId : deal.buyerId;
   if (otherId) {
     try { await bot.telegram.sendMessage(otherId, `✅ Сделка #${dealId} завершена @${ctx.from.username}.`); } catch {}
   }
 });
 
-// ------------------ Запуск ------------------
-bot.launch().then(() => console.log('🚀 Бот запущен!')).catch(err => console.error('❌ Ошибка:', err));
+// ------------------ ЗАПУСК ------------------
+bot.launch()
+  .then(() => console.log('🚀 Бот успешно запущен!'))
+  .catch(err => console.error('❌ Ошибка запуска:', err));
+
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
