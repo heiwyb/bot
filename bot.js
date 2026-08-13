@@ -238,6 +238,7 @@ bot.action(/^role_(buyer|seller)$/, async (ctx) => {
   );
 });
 
+// Обработка ссылок через hears
 bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
   if (ctx.session.step !== 'create_deal_links') return;
   const links = ctx.message.text.split('\n').filter(l => l.trim());
@@ -249,16 +250,7 @@ bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
   await ctx.reply('Выберите валюту:', { ...currencyKeyboard });
 });
 
-bot.on('text', async (ctx) => {
-  if (ctx.session.step === 'create_deal_links') {
-    return ctx.reply('⚠️ Пожалуйста, введите ссылки в формате https://... или t.me/... (каждая с новой строки).');
-  }
-  // Если это не часть диалога и не команда – подсказка
-  if (ctx.session.step === 'idle' && !ctx.message.text.startsWith('/')) {
-    await ctx.reply('ℹ️ Используйте /start для начала работы или кнопки меню.');
-  }
-});
-
+// Выбор валюты
 bot.action(/^cur_(.+)$/, async (ctx) => {
   const currency = ctx.match[1];
   ctx.session.data.currency = currency;
@@ -268,60 +260,111 @@ bot.action(/^cur_(.+)$/, async (ctx) => {
   ]));
 });
 
-// Исправленный обработчик суммы – срабатывает на любое число, даже с пробелами
-bot.hears(/^\s*(\d+(?:[.,]\d+)?)\s*$/, async (ctx) => {
-  if (ctx.session.step !== 'create_deal_amount') return;
-  const raw = ctx.message.text.trim().replace(',', '.');
-  const amount = parseFloat(raw);
-  if (isNaN(amount) || amount <= 0) {
-    return ctx.reply('❌ Введите корректное число (больше 0).');
+// ------------------ УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК ТЕКСТА ------------------
+// Здесь обрабатываются все текстовые сообщения, включая ввод суммы, карты, TON и прочие
+bot.on('text', async (ctx) => {
+  const text = ctx.message.text.trim();
+  const step = ctx.session.step;
+
+  console.log(`Обработка текста. Шаг: ${step}, текст: ${text}`);
+
+  // 1. Ввод суммы (шаг create_deal_amount)
+  if (step === 'create_deal_amount') {
+    const amount = parseFloat(text);
+    if (isNaN(amount) || amount <= 0) {
+      return ctx.reply('❌ Введите корректное число (больше 0).');
+    }
+    ctx.session.data.amount = amount;
+
+    const userId = ctx.from.id;
+    const user = getUser(userId);
+    const role = ctx.session.data.role;
+    const links = ctx.session.data.links;
+    const currency = ctx.session.data.currency;
+
+    const dealId = generateDealId();
+    const deal = {
+      id: dealId,
+      buyerId: role === 'buyer' ? userId : null,
+      sellerId: role === 'seller' ? userId : null,
+      buyerUsername: role === 'buyer' ? ctx.from.username || `user${userId}` : null,
+      sellerUsername: role === 'seller' ? ctx.from.username || `user${userId}` : null,
+      links: links,
+      amount: amount,
+      currency: currency,
+      status: 'active',
+      createdAt: new Date().toISOString(),
+      completedAt: null
+    };
+    saveDeal(deal);
+
+    const stats = user.stats;
+    stats.total += 1;
+    updateUser(userId, { stats });
+
+    ctx.session.step = 'idle';
+    const data = ctx.session.data;
+    ctx.session.data = {};
+
+    const roleText = role === 'buyer' ? 'Покупатель' : 'Продавец';
+    const shareLink = `https://t.me/${ctx.botInfo.username}?start=deal_${dealId}`;
+    const inviteText = role === 'buyer'
+      ? `Ссылка для продавца:\n${shareLink}`
+      : `Ссылка для покупателя:\n${shareLink}`;
+
+    await ctx.replyWithHTML(
+      `<b>Сделка создана!</b>\n\nID сделки: ${dealId}\nВаша роль: ${roleText}\nСумма: ${amount} ${currency}\nОписание:\n${links.join('\n')}\n\n${inviteText}\n\nПоддержка: @AgentNFTDeals`,
+      Markup.inlineKeyboard([
+        [Markup.button.url('📦 Показать подарок', links[0])],
+        [Markup.button.callback('✅ Завершить сделку', `complete_deal_${dealId}`)],
+        [Markup.button.callback('🔙 В меню', 'main_menu')]
+      ])
+    );
+    return;
   }
-  ctx.session.data.amount = amount;
-  const userId = ctx.from.id;
-  const user = getUser(userId);
-  const role = ctx.session.data.role;
-  const links = ctx.session.data.links;
-  const currency = ctx.session.data.currency;
 
-  const dealId = generateDealId();
-  const deal = {
-    id: dealId,
-    buyerId: role === 'buyer' ? userId : null,
-    sellerId: role === 'seller' ? userId : null,
-    buyerUsername: role === 'buyer' ? ctx.from.username || `user${userId}` : null,
-    sellerUsername: role === 'seller' ? ctx.from.username || `user${userId}` : null,
-    links: links,
-    amount: amount,
-    currency: currency,
-    status: 'active',
-    createdAt: new Date().toISOString(),
-    completedAt: null
-  };
-  saveDeal(deal);
+  // 2. Добавление карты
+  if (step === 'add_card') {
+    const parts = text.split(' - ');
+    if (parts.length !== 2) {
+      return ctx.reply('❌ Неверный формат. Используйте: Банк - Номер карты');
+    }
+    const userId = ctx.from.id;
+    const reqs = getRequisites(userId);
+    reqs.cards.push({ bank: parts[0].trim(), number: parts[1].trim() });
+    saveRequisites(userId, reqs);
+    ctx.session.step = 'idle';
+    await ctx.reply('✅ Карта добавлена!', { ...backToMenuKeyboard });
+    return;
+  }
 
-  const stats = user.stats;
-  stats.total += 1;
-  updateUser(userId, { stats });
+  // 3. Добавление TON
+  if (step === 'add_ton') {
+    const address = text;
+    if (!address.startsWith('UQ') && !address.startsWith('EQ')) {
+      return ctx.reply('❌ Адрес должен начинаться с UQ или EQ. Попробуйте снова.');
+    }
+    const userId = ctx.from.id;
+    const reqs = getRequisites(userId);
+    reqs.tonWallets.push({ address });
+    saveRequisites(userId, reqs);
+    ctx.session.step = 'idle';
+    await ctx.reply('✅ TON кошелек добавлен!', { ...backToMenuKeyboard });
+    return;
+  }
 
-  ctx.session.step = 'idle';
-  ctx.session.data = {};
+  // 4. Если на шаге ввода ссылок отправлен не ссылочный текст – предупредить
+  if (step === 'create_deal_links') {
+    return ctx.reply('⚠️ Пожалуйста, введите ссылки в формате https://... или t.me/... (каждая с новой строки).');
+  }
 
-  const roleText = role === 'buyer' ? 'Покупатель' : 'Продавец';
-  const shareLink = `https://t.me/${ctx.botInfo.username}?start=deal_${dealId}`;
-  const inviteText = role === 'buyer'
-    ? `Ссылка для продавца:\n${shareLink}`
-    : `Ссылка для покупателя:\n${shareLink}`;
-
-  await ctx.replyWithHTML(
-    `<b>Сделка создана!</b>\n\nID сделки: ${dealId}\nВаша роль: ${roleText}\nСумма: ${amount} ${currency}\nОписание:\n${links.join('\n')}\n\n${inviteText}\n\nПоддержка: @AgentNFTDeals`,
-    Markup.inlineKeyboard([
-      [Markup.button.url('📦 Показать подарок', links[0])],
-      [Markup.button.callback('✅ Завершить сделку', `complete_deal_${dealId}`)],
-      [Markup.button.callback('🔙 В меню', 'main_menu')]
-    ])
-  );
+  // 5. Если ничего из вышеперечисленного и шаг idle – подсказка
+  if (step === 'idle' && !text.startsWith('/')) {
+    await ctx.reply('ℹ️ Используйте /start для начала работы или кнопки меню.');
+  }
 });
 
+// ------------------ Остальные обработчики ------------------
 bot.action('profile', async (ctx) => {
   const userId = ctx.from.id;
   const user = getUser(userId);
@@ -378,37 +421,6 @@ bot.action('view_requisites', async (ctx) => {
     }
   }
   await ctx.editMessageText(text, { parse_mode: 'HTML', ...backToMenuKeyboard });
-});
-
-bot.on('text', async (ctx) => {
-  if (ctx.session.step === 'add_card') {
-    const text = ctx.message.text;
-    const parts = text.split(' - ');
-    if (parts.length !== 2) {
-      return ctx.reply('❌ Неверный формат. Используйте: Банк - Номер карты');
-    }
-    const userId = ctx.from.id;
-    const reqs = getRequisites(userId);
-    reqs.cards.push({ bank: parts[0].trim(), number: parts[1].trim() });
-    saveRequisites(userId, reqs);
-    ctx.session.step = 'idle';
-    await ctx.reply('✅ Карта добавлена!', { ...backToMenuKeyboard });
-    return;
-  }
-
-  if (ctx.session.step === 'add_ton') {
-    const address = ctx.message.text.trim();
-    if (!address.startsWith('UQ') && !address.startsWith('EQ')) {
-      return ctx.reply('❌ Адрес должен начинаться с UQ или EQ. Попробуйте снова.');
-    }
-    const userId = ctx.from.id;
-    const reqs = getRequisites(userId);
-    reqs.tonWallets.push({ address });
-    saveRequisites(userId, reqs);
-    ctx.session.step = 'idle';
-    await ctx.reply('✅ TON кошелек добавлен!', { ...backToMenuKeyboard });
-    return;
-  }
 });
 
 bot.action('referrals', async (ctx) => {
