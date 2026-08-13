@@ -137,17 +137,17 @@ bot.start(async (ctx) => {
     const dealId = parts[1].replace('deal_', '');
     const deal = getDeal(dealId);
     if (!deal) return ctx.reply('❌ Сделка не найдена.');
-    if (deal.buyerId === userId || deal.sellerId === userId) return ctx.reply('✅ Вы уже участник этой сделки.');
+    if (deal.buyerId === userId || deal.sellerId === userId) return ctx.reply('✅ Вы уже участник.');
     if (!deal.sellerId) {
       deal.sellerId = userId;
       deal.sellerUsername = ctx.from.username || `user${userId}`;
       saveDeal(deal);
       try { await bot.telegram.sendMessage(deal.buyerId, `✅ Продавец @${deal.sellerUsername} присоединился к сделке #${deal.id}`); } catch {}
-      ctx.reply(`✅ Вы присоединились к сделке #${deal.id} как продавец.\nСсылки: ${deal.links.join('\n')}\nСумма: ${deal.amount} ${deal.currency}\n\nСвяжитесь с покупателем.`, Markup.inlineKeyboard([
+      ctx.reply(`✅ Вы присоединились к сделке #${deal.id} как продавец.\nСсылки: ${deal.links.join('\n')}\nСумма: ${deal.amount} ${deal.currency}`, Markup.inlineKeyboard([
         [Markup.button.url('📦 Показать подарок', deal.links[0])],
         [Markup.button.callback('✅ Завершить сделку', `complete_deal_${deal.id}`)]
       ]));
-    } else ctx.reply('❌ У этой сделки уже есть продавец.');
+    } else ctx.reply('❌ У сделки уже есть продавец.');
     return;
   }
 
@@ -161,7 +161,7 @@ bot.start(async (ctx) => {
   );
 });
 
-// ------------------ Callback'и ------------------
+// ------------------ Обработчики callback'ов ------------------
 bot.action('main_menu', async (ctx) => {
   ctx.session.step = 'idle';
   ctx.session.data = {};
@@ -229,6 +229,12 @@ bot.on('text', async (ctx) => {
     const links = ctx.session.data.links;
     const currency = ctx.session.data.currency;
 
+    // Проверка, что все данные есть
+    if (!role || !links || !currency) {
+      ctx.session.step = 'idle';
+      return ctx.reply('⚠️ Что-то пошло не так. Начните создание сделки заново.', { ...backToMenuKeyboard });
+    }
+
     const dealId = generateDealId();
     const deal = {
       id: dealId,
@@ -247,7 +253,6 @@ bot.on('text', async (ctx) => {
     updateUser(userId, { stats });
 
     ctx.session.step = 'idle';
-    const data = ctx.session.data;
     ctx.session.data = {};
 
     const roleText = role === 'buyer' ? 'Покупатель' : 'Продавец';
