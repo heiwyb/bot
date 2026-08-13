@@ -1,11 +1,40 @@
-require('dotenv').config();
+require('dotenv').config({ path: __dirname + '/.env' });
+
 const { Telegraf, Markup, session } = require('telegraf');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
 
+// ------------------ Проверка токена ------------------
+const TOKEN = process.env.TOKEN;
+if (!TOKEN) {
+  console.error('❌ Токен не найден в .env!');
+  process.exit(1);
+}
+console.log('✅ Токен загружен');
+
 // ------------------ Инициализация бота ------------------
-const bot = new Telegraf(process.env.TOKEN);
+const bot = new Telegraf(TOKEN);
+
+// ------------------ Удаляем webhook (если был) ------------------
+bot.telegram.deleteWebhook().then(() => {
+  console.log('✅ Webhook удалён, используем long polling');
+}).catch(err => {
+  console.error('⚠️ Ошибка удаления webhook:', err.message);
+});
+
+// ------------------ Логирование всех входящих событий ------------------
+bot.use(async (ctx, next) => {
+  const type = ctx.updateType;
+  let data = '';
+  if (type === 'message') {
+    data = ctx.message.text || '[не текст]';
+  } else if (type === 'callback_query') {
+    data = ctx.callbackQuery.data;
+  }
+  console.log(`[${new Date().toISOString()}] От ${ctx.from?.id} (${type}): ${data}`);
+  await next();
+});
 
 // ------------------ Хранилище данных (JSON) ------------------
 const DATA_DIR = path.join(__dirname, 'data');
@@ -15,7 +44,6 @@ const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const DEALS_FILE = path.join(DATA_DIR, 'deals.json');
 const REQUISITES_FILE = path.join(DATA_DIR, 'requisites.json');
 
-// Загрузка данных
 function loadData(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -28,7 +56,6 @@ function saveData(file, data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-// Инициализация пустых файлов
 if (!fs.existsSync(USERS_FILE)) saveData(USERS_FILE, {});
 if (!fs.existsSync(DEALS_FILE)) saveData(DEALS_FILE, {});
 if (!fs.existsSync(REQUISITES_FILE)) saveData(REQUISITES_FILE, {});
@@ -82,7 +109,6 @@ function saveRequisites(userId, reqs) {
   saveData(REQUISITES_FILE, all);
 }
 
-// Генерация короткого ID для сделки
 function generateDealId() {
   return '#' + uuidv4().slice(0, 10);
 }
@@ -90,8 +116,8 @@ function generateDealId() {
 // ------------------ Сессии ------------------
 bot.use(session({
   defaultSession: () => ({
-    step: 'idle',       // текущий шаг диалога
-    data: {}            // временные данные
+    step: 'idle',
+    data: {}
   })
 }));
 
@@ -139,27 +165,24 @@ const requisitesMenuKeyboard = Markup.inlineKeyboard([
 
 // ------------------ Обработчики команд ------------------
 bot.start(async (ctx) => {
+  console.log('✅ Команда /start от', ctx.from.id);
   const text = ctx.message.text;
   const parts = text.split(' ');
   const userId = ctx.from.id;
 
-  // Если есть параметр deal_XXX – присоединение к сделке
   if (parts.length > 1 && parts[1].startsWith('deal_')) {
     const dealId = parts[1].replace('deal_', '');
     const deal = getDeal(dealId);
     if (!deal) {
       return ctx.reply('❌ Сделка не найдена. Возможно, она уже завершена или удалена.');
     }
-    // Проверяем, не является ли пользователь уже участником
     if (deal.buyerId === userId || deal.sellerId === userId) {
       return ctx.reply('✅ Вы уже участник этой сделки.');
     }
-    // Если продавец еще не назначен, назначаем текущего пользователя
     if (!deal.sellerId) {
       deal.sellerId = userId;
       deal.sellerUsername = ctx.from.username || `user${userId}`;
       saveDeal(deal);
-      // Уведомляем покупателя
       try {
         await bot.telegram.sendMessage(deal.buyerId, `✅ Продавец @${deal.sellerUsername} присоединился к сделке #${deal.id}`);
       } catch {}
@@ -173,7 +196,6 @@ bot.start(async (ctx) => {
     return;
   }
 
-  // Обычный старт – приветствие
   const user = getUser(userId);
   user.username = ctx.from.username || `user${userId}`;
   updateUser(userId, { username: user.username });
@@ -196,23 +218,18 @@ bot.action('main_menu', async (ctx) => {
   );
 });
 
-// ----- Создание сделки -----
 bot.action('create_deal', async (ctx) => {
   ctx.session.step = 'create_deal_role';
   ctx.session.data = {};
-  await ctx.editMessageText(
-    'Выберите роль в сделке:',
-    { ...roleKeyboard }
-  );
+  await ctx.editMessageText('Выберите роль в сделке:', { ...roleKeyboard });
 });
 
-// Выбор роли
 bot.action(/^role_(buyer|seller)$/, async (ctx) => {
   const role = ctx.match[1];
   ctx.session.data.role = role;
   ctx.session.step = 'create_deal_links';
   await ctx.editMessageText(
-    role === 'buyer' 
+    role === 'buyer'
       ? 'Создание сделки | Покупатель\n\nВведите ссылку(-и) на подарок(-и):\nФормат: https://... или t.me/...\nПример: t.me/nft/DurovsCap-1\n\nЕсли несколько подарков, каждую ссылку с новой строки:'
       : 'Создание сделки | Продавец\n\nВведите ссылку(-и) на подарок(-и) (каждая с новой строки):',
     Markup.inlineKeyboard([
@@ -221,7 +238,6 @@ bot.action(/^role_(buyer|seller)$/, async (ctx) => {
   );
 });
 
-// Обработка ввода ссылок (текст)
 bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
   if (ctx.session.step !== 'create_deal_links') return;
   const links = ctx.message.text.split('\n').filter(l => l.trim());
@@ -233,15 +249,16 @@ bot.hears(/^https?:\/\/|t\.me\//, async (ctx) => {
   await ctx.reply('Выберите валюту:', { ...currencyKeyboard });
 });
 
-// Пропускаем неверные сообщения на шаге ссылок
 bot.on('text', async (ctx) => {
   if (ctx.session.step === 'create_deal_links') {
-    // Если текст не похож на ссылку, просим ввести правильно
     return ctx.reply('⚠️ Пожалуйста, введите ссылки в формате https://... или t.me/... (каждая с новой строки).');
+  }
+  // Если это не часть диалога и не команда – подсказка
+  if (ctx.session.step === 'idle' && !ctx.message.text.startsWith('/')) {
+    await ctx.reply('ℹ️ Используйте /start для начала работы или кнопки меню.');
   }
 });
 
-// Выбор валюты
 bot.action(/^cur_(.+)$/, async (ctx) => {
   const currency = ctx.match[1];
   ctx.session.data.currency = currency;
@@ -251,7 +268,6 @@ bot.action(/^cur_(.+)$/, async (ctx) => {
   ]));
 });
 
-// Обработка ввода суммы (текст)
 bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
   if (ctx.session.step !== 'create_deal_amount') return;
   const amount = parseFloat(ctx.message.text);
@@ -259,7 +275,6 @@ bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
     return ctx.reply('❌ Введите корректное число (больше 0).');
   }
   ctx.session.data.amount = amount;
-  // Создаем сделку
   const userId = ctx.from.id;
   const user = getUser(userId);
   const role = ctx.session.data.role;
@@ -276,13 +291,12 @@ bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
     links: links,
     amount: amount,
     currency: currency,
-    status: 'active', // active, completed, cancelled
+    status: 'active',
     createdAt: new Date().toISOString(),
     completedAt: null
   };
   saveDeal(deal);
 
-  // Обновляем статистику пользователя
   const stats = user.stats;
   stats.total += 1;
   updateUser(userId, { stats });
@@ -290,10 +304,9 @@ bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
   ctx.session.step = 'idle';
   ctx.session.data = {};
 
-  // Формируем сообщение о создании
   const roleText = role === 'buyer' ? 'Покупатель' : 'Продавец';
   const shareLink = `https://t.me/${ctx.botInfo.username}?start=deal_${dealId}`;
-  const inviteText = role === 'buyer' 
+  const inviteText = role === 'buyer'
     ? `Ссылка для продавца:\n${shareLink}`
     : `Ссылка для покупателя:\n${shareLink}`;
 
@@ -307,12 +320,11 @@ bot.hears(/^\d+(\.\d+)?$/, async (ctx) => {
   );
 });
 
-// ----- Профиль -----
 bot.action('profile', async (ctx) => {
   const userId = ctx.from.id;
   const user = getUser(userId);
   const stats = user.stats;
-  const text = 
+  const text =
     `<b>Профиль пользователя</b>\n\n` +
     `Юзер: @${user.username || 'не указан'}\n` +
     `ID: ${userId}\n\n` +
@@ -326,7 +338,6 @@ bot.action('profile', async (ctx) => {
   await ctx.editMessageText(text, { parse_mode: 'HTML', ...profileKeyboard });
 });
 
-// ----- Реквизиты -----
 bot.action('requisites', async (ctx) => {
   await ctx.editMessageText('Управление реквизитами\n\nВыберите опцию:', { ...requisitesMenuKeyboard });
 });
@@ -367,7 +378,6 @@ bot.action('view_requisites', async (ctx) => {
   await ctx.editMessageText(text, { parse_mode: 'HTML', ...backToMenuKeyboard });
 });
 
-// Обработка ввода карты
 bot.on('text', async (ctx) => {
   if (ctx.session.step === 'add_card') {
     const text = ctx.message.text;
@@ -399,12 +409,10 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// ----- Рефералы (заглушка) -----
 bot.action('referrals', async (ctx) => {
   await ctx.editMessageText('🔗 <b>Реферальная система</b>\n\nСкоро здесь появится программа лояльности. Следите за обновлениями!', { parse_mode: 'HTML', ...backToMenuKeyboard });
 });
 
-// ----- История сделок -----
 bot.action('history', async (ctx) => {
   const userId = ctx.from.id;
   const deals = getUserDeals(userId);
@@ -419,12 +427,10 @@ bot.action('history', async (ctx) => {
   }
 });
 
-// ----- Поддержка -----
 bot.action('support', async (ctx) => {
-  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @GramHelps\n\nМы ответим в ближайшее время.', { parse_mode: 'HTML', ...backToMenuKeyboard });
+  await ctx.editMessageText('📧 <b>Поддержка</b>\n\nСвяжитесь с нами: @GramHelms\n\nМы ответим в ближайшее время.', { parse_mode: 'HTML', ...backToMenuKeyboard });
 });
 
-// ----- Пополнение / Вывод (заглушки) -----
 bot.action('topup', async (ctx) => {
   await ctx.answerCbQuery('💰 Функция пополнения в разработке.');
 });
@@ -435,23 +441,19 @@ bot.action('promo', async (ctx) => {
   await ctx.answerCbQuery('🎫 Промокоды появятся позже.');
 });
 
-// ----- Завершение сделки (для демонстрации) -----
 bot.action(/^complete_deal_(.+)$/, async (ctx) => {
   const dealId = ctx.match[1];
   const deal = getDeal(dealId);
   if (!deal) return ctx.reply('❌ Сделка не найдена.');
   if (deal.status === 'completed') return ctx.reply('✅ Эта сделка уже завершена.');
-  // Проверяем, что пользователь участник
   const userId = ctx.from.id;
   if (deal.buyerId !== userId && deal.sellerId !== userId) {
     return ctx.reply('❌ Вы не участник этой сделки.');
   }
-  // Обновляем статус
   deal.status = 'completed';
   deal.completedAt = new Date().toISOString();
   saveDeal(deal);
 
-  // Обновляем статистику обоих участников
   const buyer = getUser(deal.buyerId);
   const seller = getUser(deal.sellerId);
   buyer.stats.successful += 1;
@@ -462,7 +464,6 @@ bot.action(/^complete_deal_(.+)$/, async (ctx) => {
   updateUser(deal.sellerId, { stats: seller.stats });
 
   await ctx.reply(`✅ Сделка #${dealId} успешно завершена! Спасибо, что воспользовались Gram Deals.`, { ...backToMenuKeyboard });
-  // Уведомляем другого участника
   const otherId = deal.buyerId === userId ? deal.sellerId : deal.buyerId;
   if (otherId) {
     try {
@@ -471,11 +472,11 @@ bot.action(/^complete_deal_(.+)$/, async (ctx) => {
   }
 });
 
-// ------------------ Запуск бота ------------------
+// ------------------ Запуск ------------------
 bot.launch().then(() => {
-  console.log('Бот Gram Deals запущен!');
+  console.log('🚀 Бот Gram Deals запущен и работает!');
 }).catch(err => {
-  console.error('Ошибка запуска:', err);
+  console.error('❌ Ошибка запуска:', err);
 });
 
 // Graceful stop
