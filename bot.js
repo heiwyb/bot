@@ -3,11 +3,11 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const bot = new Telegraf(process.env.TOKEN);
-const BOT_USERNAME = 'GramsDealBot'; // Укажите точное имя вашего бота (без @)
+const BOT_USERNAME = 'GramsDealBot'; // ← ЗАМЕНИТЕ на точное имя вашего бота (без @)
 
 // ===== Хранилища данных (в памяти) =====
-const users = new Map(); // userId -> { balance, deals, verified, cards, tonWallets, totalDeals, successDeals, turnover }
-const deals = new Map(); // dealId -> { id, role, currency, amount, links, buyerId, sellerId, status, createdAt }
+const users = new Map();
+const deals = new Map();
 
 // ===== Вспомогательные функции =====
 function getUser(userId) {
@@ -36,17 +36,26 @@ function generateDealId() {
 }
 
 function resetSession(ctx) {
-  ctx.session.deal = null;
-  ctx.session.awaiting = null;
+  if (ctx.session) {
+    ctx.session.deal = null;
+    ctx.session.awaiting = null;
+  }
 }
 
-// ===== Middleware сессии =====
-bot.use(session());
+// ===== Middleware сессии (с инициализацией по умолчанию) =====
+bot.use(session({
+  defaultSession: () => ({
+    deal: null,
+    awaiting: null,
+  })
+}));
 
 // ===== Обработчик команды /start =====
 bot.start(async (ctx) => {
+  // Убедимся, что сессия есть
+  if (!ctx.session) ctx.session = { deal: null, awaiting: null };
+
   const payload = ctx.startPayload;
-  // Если перешли по ссылке сделки
   if (payload && payload.startsWith('deal_')) {
     const dealId = payload.replace('deal_', '');
     const deal = deals.get(dealId);
@@ -72,7 +81,6 @@ bot.start(async (ctx) => {
     return;
   }
 
-  // Обычный старт
   getUser(ctx.from.id);
   resetSession(ctx);
   await ctx.reply(
@@ -175,6 +183,11 @@ bot.action('role_buyer', async (ctx) => {
 
 // ===== Обработка всех текстовых сообщений =====
 bot.on('text', async (ctx) => {
+  // Если сессия не инициализирована – создаём
+  if (!ctx.session) {
+    ctx.session = { deal: null, awaiting: null };
+  }
+
   const awaiting = ctx.session.awaiting;
   const text = ctx.message.text.trim();
 
@@ -239,7 +252,6 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // Если ничего не подошло
   await ctx.reply('Неизвестная команда. Используйте кнопки.');
 });
 
