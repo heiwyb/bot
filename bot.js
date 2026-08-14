@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const bot = new Telegraf(process.env.TOKEN);
-const BOT_USERNAME = 'GramsDealBot'; // Укажите имя вашего бота (без @)
+const BOT_USERNAME = 'GramsDealBot'; // Укажите точное имя вашего бота (без @)
 
 // ===== Хранилища данных (в памяти) =====
 const users = new Map(); // userId -> { balance, deals, verified, cards, tonWallets, totalDeals, successDeals, turnover }
@@ -35,7 +35,6 @@ function generateDealId() {
   return id;
 }
 
-// ===== Сброс сессии =====
 function resetSession(ctx) {
   ctx.session.deal = null;
   ctx.session.awaiting = null;
@@ -74,7 +73,7 @@ bot.start(async (ctx) => {
   }
 
   // Обычный старт
-  const user = getUser(ctx.from.id);
+  getUser(ctx.from.id);
   resetSession(ctx);
   await ctx.reply(
     'Добро пожаловать в Gram Deals!\n\n' +
@@ -156,7 +155,7 @@ bot.action('create_deal', async (ctx) => {
 // ===== Роль Покупатель =====
 bot.action('role_buyer', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session.deal = { role: 'buyer', step: 'links' };
+  ctx.session.deal = { role: 'buyer' };
   await ctx.reply(
     '🛒 Создание сделки | Покупатель\n\n' +
     'Введите ссылку(-и) на подарок(-и):\n' +
@@ -179,7 +178,6 @@ bot.on('text', async (ctx) => {
   const awaiting = ctx.session.awaiting;
   const text = ctx.message.text.trim();
 
-  // Если ничего не ожидаем – просто напоминаем использовать кнопки
   if (!awaiting) {
     await ctx.reply('Пожалуйста, используйте кнопки для навигации.');
     return;
@@ -297,7 +295,6 @@ async function createDeal(ctx) {
   };
   deals.set(dealId, newDeal);
 
-  // Обновляем статистику пользователя
   const user = getUser(ctx.from.id);
   user.totalDeals += 1;
   user.turnover += deal.amount;
@@ -325,7 +322,6 @@ async function createDeal(ctx) {
 // ===== Роль Продавец (упрощённо) =====
 bot.action('role_seller', async (ctx) => {
   await ctx.answerCbQuery('Функция для продавца в разработке');
-  // Можно реализовать аналогичный поток
 });
 
 // ===== Мои сделки =====
@@ -415,7 +411,6 @@ bot.action(/accept_(.+)/, async (ctx) => {
   deal.status = 'active';
   await ctx.answerCbQuery('✅ Сделка принята!');
   await ctx.reply(`✅ Сделка #${dealId} принята. Теперь свяжитесь с покупателем для обмена.`);
-  // Здесь можно уведомить покупателя
 });
 
 bot.action(/reject_(.+)/, async (ctx) => {
