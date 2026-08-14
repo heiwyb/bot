@@ -26,13 +26,19 @@ function getUser(userId) {
   return users.get(userId);
 }
 
+// Генерирует ID без символа '#'
 function generateDealId() {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  let id = '#';
+  let id = '';
   for (let i = 0; i < 10; i++) {
     id += chars[Math.floor(Math.random() * chars.length)];
   }
   return id;
+}
+
+// Отображает ID с символом '#' для пользователя
+function displayDealId(id) {
+  return `#${id}`;
 }
 
 function resetSession(ctx) {
@@ -55,7 +61,7 @@ bot.start(async (ctx) => {
 
   const payload = ctx.startPayload;
   if (payload && payload.startsWith('deal_')) {
-    const dealId = payload.replace('deal_', '');
+    const dealId = payload.replace('deal_', ''); // теперь без '#'
     const deal = deals.get(dealId);
     if (!deal) {
       await ctx.reply('❌ Сделка не найдена или уже закрыта.');
@@ -66,7 +72,7 @@ bot.start(async (ctx) => {
       return;
     }
 
-    // Определяем, кто создатель и кто должен принять
+    // Определяем создателя
     let creatorRole, creatorId;
     if (deal.buyerId) {
       creatorRole = 'Покупатель';
@@ -79,15 +85,13 @@ bot.start(async (ctx) => {
       return;
     }
 
-    // Если пользователь является создателем – не даём принять свою сделку
     if (ctx.from.id === creatorId) {
       await ctx.reply('⚠️ Вы создали эту сделку. Ожидайте, пока другая сторона примет её.');
       return;
     }
 
-    // Показываем предложение
     await ctx.reply(
-      `📦 Вы перешли по ссылке сделки #${dealId}\n\n` +
+      `📦 Вы перешли по ссылке сделки ${displayDealId(dealId)}\n\n` +
       `${creatorRole}: @${ctx.from.username || 'unknown'}\n` +
       `Сумма: ${deal.amount} ${deal.currency}\n` +
       `Товар:\n${deal.links.join('\n')}\n\n` +
@@ -180,7 +184,7 @@ bot.action('create_deal', async (ctx) => {
   );
 });
 
-// ===== Общая функция для начала создания сделки =====
+// Общая функция для начала создания сделки
 async function startDealCreation(ctx, role) {
   ctx.session.deal = { role };
   await ctx.reply(
@@ -325,7 +329,7 @@ async function createDeal(ctx) {
     return;
   }
 
-  const dealId = generateDealId();
+  const dealId = generateDealId();  // без '#'
   const newDeal = {
     id: dealId,
     role: dealData.role,
@@ -349,7 +353,7 @@ async function createDeal(ctx) {
 
   let replyText =
     `✅ Сделка создана!\n\n` +
-    `ID сделки: ${dealId}\n` +
+    `ID сделки: ${displayDealId(dealId)}\n` +
     `Ваша роль: ${roleName}\n` +
     `Сумма: ${dealData.amount} ${dealData.currency}\n` +
     `Описание:\n${dealData.links.join('\n')}\n\n` +
@@ -442,7 +446,7 @@ bot.action('view_rekvizity', async (ctx) => {
 //  ПРИНЯТИЕ / ОТКЛОНЕНИЕ СДЕЛКИ
 // ============================================================
 bot.action(/accept_(.+)/, async (ctx) => {
-  const dealId = ctx.match[1];
+  const dealId = ctx.match[1]; // без '#'
   const deal = deals.get(dealId);
   if (!deal) {
     await ctx.answerCbQuery('❌ Сделка не найдена');
@@ -453,7 +457,7 @@ bot.action(/accept_(.+)/, async (ctx) => {
     return;
   }
 
-  // Определяем, кто принимает
+  // Нельзя принять свою сделку
   if (deal.buyerId && deal.buyerId === ctx.from.id) {
     await ctx.answerCbQuery('❌ Вы не можете принять свою собственную сделку как покупатель');
     return;
@@ -463,7 +467,7 @@ bot.action(/accept_(.+)/, async (ctx) => {
     return;
   }
 
-  // Если сделка создана покупателем, то принимает продавец – заполняем sellerId
+  // Заполняем недостающую сторону
   if (deal.buyerId && !deal.sellerId) {
     deal.sellerId = ctx.from.id;
   } else if (deal.sellerId && !deal.buyerId) {
@@ -475,7 +479,7 @@ bot.action(/accept_(.+)/, async (ctx) => {
 
   deal.status = 'active';
   await ctx.answerCbQuery('✅ Сделка принята!');
-  await ctx.reply(`✅ Сделка #${dealId} принята. Теперь свяжитесь с другой стороной для обмена.`);
+  await ctx.reply(`✅ Сделка ${displayDealId(dealId)} принята. Теперь свяжитесь с другой стороной для обмена.`);
 });
 
 bot.action(/reject_(.+)/, async (ctx) => {
@@ -487,7 +491,7 @@ bot.action(/reject_(.+)/, async (ctx) => {
   }
   deal.status = 'rejected';
   await ctx.answerCbQuery('❌ Сделка отклонена');
-  await ctx.reply(`❌ Вы отклонили сделку #${dealId}.`);
+  await ctx.reply(`❌ Вы отклонили сделку ${displayDealId(dealId)}.`);
 });
 
 // ============================================================
