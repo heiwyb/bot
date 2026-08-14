@@ -68,7 +68,7 @@ bot.start(async (ctx) => {
     'Добро пожаловать в Gram Deals!\n\n' +
     'Сервис, обеспечивающий безопасность и удобство проведения сделок с цифровыми подарками.\n\n' +
     '🔒 Сервис спонсирован: @gram\n' +
-    '📧 Поддержка: @GramHelps\n\n' +
+    '📧 Поддержка: @AgentNFTDeals\n\n' +
     'Начните работу, нажав кнопку ниже',
     Markup.inlineKeyboard([
       [Markup.button.callback('Начать работу', 'main_menu')]
@@ -107,7 +107,7 @@ bot.action('profile', async (ctx) => {
     `Успешных: ${user.successDeals}\n` +
     `Оборот: ${user.turnover} ₽\n\n` +
     `Верификация: ${user.verified ? '✅ Пройдена' : '⚙️ Не пройдена'}\n\n` +
-    `Поддержка: @GramHelps`;
+    `Поддержка: @AgentNFTDeals`;
   await ctx.reply(text, Markup.inlineKeyboard([
     [Markup.button.callback('💰 Пополнить', 'deposit')],
     [Markup.button.callback('💸 Вывод', 'withdraw')],
@@ -276,7 +276,7 @@ async function showDealConfirmation(ctx) {
     `Сумма: ${deal.amount} ${deal.currency}\n` +
     `Описание:\n${linksText}\n\n` +
     `Ссылка для продавца:\n${sellerLink}\n\n` +
-    `Поддержка: @GramHelps\n\n` +
+    `Поддержка: @AgentNFTDeals\n\n` +
     `Telegram\nDurov's Cap #1\nПОКАЗАТЬ ПОДАРОК`;
 
   await ctx.reply(replyText, Markup.inlineKeyboard([
