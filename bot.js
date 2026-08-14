@@ -3,9 +3,9 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const bot = new Telegraf(process.env.TOKEN);
-const BOT_USERNAME = 'GramsDealBot'; // ← ЗАМЕНИТЕ на точное имя вашего бота (без @)
+const BOT_USERNAME = 'Nnft_Dealsbot';  // ← Имя вашего бота (без @)
 
-// ===== Хранилища данных (в памяти) =====
+// ===== Хранилища данных =====
 const users = new Map();
 const deals = new Map();
 
@@ -42,17 +42,15 @@ function resetSession(ctx) {
   }
 }
 
-// ===== Middleware сессии (с инициализацией по умолчанию) =====
+// ===== Сессия с инициализацией =====
 bot.use(session({
-  defaultSession: () => ({
-    deal: null,
-    awaiting: null,
-  })
+  defaultSession: () => ({ deal: null, awaiting: null })
 }));
 
-// ===== Обработчик команды /start =====
+// ============================================================
+//  СТАРТ
+// ============================================================
 bot.start(async (ctx) => {
-  // Убедимся, что сессия есть
   if (!ctx.session) ctx.session = { deal: null, awaiting: null };
 
   const payload = ctx.startPayload;
@@ -67,9 +65,30 @@ bot.start(async (ctx) => {
       await ctx.reply('❌ Эта сделка уже неактивна.');
       return;
     }
+
+    // Определяем, кто создатель и кто должен принять
+    let creatorRole, creatorId;
+    if (deal.buyerId) {
+      creatorRole = 'Покупатель';
+      creatorId = deal.buyerId;
+    } else if (deal.sellerId) {
+      creatorRole = 'Продавец';
+      creatorId = deal.sellerId;
+    } else {
+      await ctx.reply('❌ Ошибка: неизвестный создатель сделки.');
+      return;
+    }
+
+    // Если пользователь является создателем – не даём принять свою сделку
+    if (ctx.from.id === creatorId) {
+      await ctx.reply('⚠️ Вы создали эту сделку. Ожидайте, пока другая сторона примет её.');
+      return;
+    }
+
+    // Показываем предложение
     await ctx.reply(
       `📦 Вы перешли по ссылке сделки #${dealId}\n\n` +
-      `Покупатель: @${ctx.from.username || 'unknown'}\n` +
+      `${creatorRole}: @${ctx.from.username || 'unknown'}\n` +
       `Сумма: ${deal.amount} ${deal.currency}\n` +
       `Товар:\n${deal.links.join('\n')}\n\n` +
       `Хотите принять эту сделку?`,
@@ -81,6 +100,7 @@ bot.start(async (ctx) => {
     return;
   }
 
+  // Обычный старт
   getUser(ctx.from.id);
   resetSession(ctx);
   await ctx.reply(
@@ -95,7 +115,9 @@ bot.start(async (ctx) => {
   );
 });
 
-// ===== Главное меню =====
+// ============================================================
+//  ГЛАВНОЕ МЕНЮ
+// ============================================================
 bot.action('main_menu', async (ctx) => {
   await ctx.answerCbQuery();
   resetSession(ctx);
@@ -114,7 +136,9 @@ async function showMainMenu(ctx) {
   );
 }
 
-// ===== Профиль =====
+// ============================================================
+//  ПРОФИЛЬ
+// ============================================================
 bot.action('profile', async (ctx) => {
   await ctx.answerCbQuery();
   const user = getUser(ctx.from.id);
@@ -136,17 +160,13 @@ bot.action('profile', async (ctx) => {
   ]));
 });
 
-bot.action('deposit', async (ctx) => {
-  await ctx.answerCbQuery('Функция в разработке');
-});
-bot.action('withdraw', async (ctx) => {
-  await ctx.answerCbQuery('Функция в разработке');
-});
-bot.action('promo', async (ctx) => {
-  await ctx.answerCbQuery('Функция в разработке');
-});
+bot.action('deposit', async (ctx) => ctx.answerCbQuery('Функция в разработке'));
+bot.action('withdraw', async (ctx) => ctx.answerCbQuery('Функция в разработке'));
+bot.action('promo', async (ctx) => ctx.answerCbQuery('Функция в разработке'));
 
-// ===== Создание сделки – выбор роли =====
+// ============================================================
+//  ВЫБОР РОЛИ ДЛЯ СОЗДАНИЯ СДЕЛКИ
+// ============================================================
 bot.action('create_deal', async (ctx) => {
   await ctx.answerCbQuery();
   resetSession(ctx);
@@ -160,12 +180,11 @@ bot.action('create_deal', async (ctx) => {
   );
 });
 
-// ===== Роль Покупатель =====
-bot.action('role_buyer', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.session.deal = { role: 'buyer' };
+// ===== Общая функция для начала создания сделки =====
+async function startDealCreation(ctx, role) {
+  ctx.session.deal = { role };
   await ctx.reply(
-    '🛒 Создание сделки | Покупатель\n\n' +
+    `📝 Создание сделки | ${role === 'buyer' ? 'Покупатель' : 'Продавец'}\n\n` +
     'Введите ссылку(-и) на подарок(-и):\n' +
     '- Формат: https://... или t.me/...\n' +
     '- Пример: t.me/nft/DurovsCap-1\n\n' +
@@ -178,15 +197,24 @@ bot.action('role_buyer', async (ctx) => {
       [Markup.button.callback('◀ Назад', 'create_deal')]
     ])
   );
-  ctx.session.awaiting = 'buyer_links';
+  ctx.session.awaiting = 'deal_links';
+}
+
+bot.action('role_buyer', async (ctx) => {
+  await ctx.answerCbQuery();
+  await startDealCreation(ctx, 'buyer');
 });
 
-// ===== Обработка всех текстовых сообщений =====
+bot.action('role_seller', async (ctx) => {
+  await ctx.answerCbQuery();
+  await startDealCreation(ctx, 'seller');
+});
+
+// ============================================================
+//  ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ
+// ============================================================
 bot.on('text', async (ctx) => {
-  // Если сессия не инициализирована – создаём
-  if (!ctx.session) {
-    ctx.session = { deal: null, awaiting: null };
-  }
+  if (!ctx.session) ctx.session = { deal: null, awaiting: null };
 
   const awaiting = ctx.session.awaiting;
   const text = ctx.message.text.trim();
@@ -197,7 +225,7 @@ bot.on('text', async (ctx) => {
   }
 
   // === Ввод ссылок ===
-  if (awaiting === 'buyer_links') {
+  if (awaiting === 'deal_links') {
     const links = text.split('\n').filter(s => s.trim());
     if (links.length === 0) {
       await ctx.reply('❌ Введите хотя бы одну ссылку.');
@@ -210,7 +238,7 @@ bot.on('text', async (ctx) => {
   }
 
   // === Ввод суммы ===
-  if (awaiting === 'buyer_amount') {
+  if (awaiting === 'deal_amount') {
     const amount = parseFloat(text.replace(',', '.'));
     if (isNaN(amount) || amount <= 0) {
       await ctx.reply('❌ Введите корректное число');
@@ -255,7 +283,9 @@ bot.on('text', async (ctx) => {
   await ctx.reply('Неизвестная команда. Используйте кнопки.');
 });
 
-// ===== Выбор валюты =====
+// ============================================================
+//  ВЫБОР ВАЛЮТЫ
+// ============================================================
 async function showCurrencySelection(ctx) {
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback('RUB', 'currency_RUB'), Markup.button.callback('EUR', 'currency_EUR')],
@@ -266,7 +296,7 @@ async function showCurrencySelection(ctx) {
     [Markup.button.callback('← Назад', 'create_deal')],
   ]);
   await ctx.reply('Выберите валюту:', keyboard);
-  ctx.session.awaiting = 'buyer_currency';
+  ctx.session.awaiting = 'deal_currency';
 }
 
 bot.action(/currency_(.+)/, async (ctx) => {
@@ -281,13 +311,15 @@ bot.action(/currency_(.+)/, async (ctx) => {
       [Markup.button.callback('← Назад', 'create_deal')]
     ])
   );
-  ctx.session.awaiting = 'buyer_amount';
+  ctx.session.awaiting = 'deal_amount';
 });
 
-// ===== Создание сделки =====
+// ============================================================
+//  СОЗДАНИЕ СДЕЛКИ
+// ============================================================
 async function createDeal(ctx) {
-  const deal = ctx.session.deal;
-  if (!deal || !deal.links || !deal.currency || !deal.amount) {
+  const dealData = ctx.session.deal;
+  if (!dealData || !dealData.links || !dealData.currency || !dealData.amount) {
     await ctx.reply('❌ Ошибка: не все данные заполнены. Попробуйте заново.');
     resetSession(ctx);
     return;
@@ -296,12 +328,12 @@ async function createDeal(ctx) {
   const dealId = generateDealId();
   const newDeal = {
     id: dealId,
-    role: deal.role,
-    currency: deal.currency,
-    amount: deal.amount,
-    links: deal.links,
-    buyerId: ctx.from.id,
-    sellerId: null,
+    role: dealData.role,
+    currency: dealData.currency,
+    amount: dealData.amount,
+    links: dealData.links,
+    buyerId: dealData.role === 'buyer' ? ctx.from.id : null,
+    sellerId: dealData.role === 'seller' ? ctx.from.id : null,
     status: 'open',
     createdAt: new Date(),
   };
@@ -309,34 +341,31 @@ async function createDeal(ctx) {
 
   const user = getUser(ctx.from.id);
   user.totalDeals += 1;
-  user.turnover += deal.amount;
+  user.turnover += dealData.amount;
 
-  const sellerLink = `https://t.me/${BOT_USERNAME}?start=deal_${dealId}`;
-  const linksText = deal.links.join('\n');
+  const roleName = dealData.role === 'buyer' ? 'Покупатель' : 'Продавец';
+  const oppositeRole = dealData.role === 'buyer' ? 'продавца' : 'покупателя';
+  const link = `https://t.me/${BOT_USERNAME}?start=deal_${dealId}`;
 
   let replyText =
     `✅ Сделка создана!\n\n` +
     `ID сделки: ${dealId}\n` +
-    `Ваша роль: Покупатель\n` +
-    `Сумма: ${deal.amount} ${deal.currency}\n` +
-    `Описание:\n${linksText}\n\n` +
-    `Ссылка для продавца:\n${sellerLink}\n\n` +
-    `Поддержка: @AgentNFTDeals\n\n` +
-    `Telegram\nDurov's Cap #1\nПОКАЗАТЬ ПОДАРОК`;
+    `Ваша роль: ${roleName}\n` +
+    `Сумма: ${dealData.amount} ${dealData.currency}\n` +
+    `Описание:\n${dealData.links.join('\n')}\n\n` +
+    `Ссылка для ${oppositeRole}:\n${link}\n\n` +
+    `Поддержка: @AgentNFTDeals`;
 
   await ctx.reply(replyText, Markup.inlineKeyboard([
-    [Markup.button.url('ПОКАЗАТЬ ПОДАРОК', deal.links[0])]
+    [Markup.button.url('ПОКАЗАТЬ ПОДАРОК', dealData.links[0])]
   ]));
 
   resetSession(ctx);
 }
 
-// ===== Роль Продавец (упрощённо) =====
-bot.action('role_seller', async (ctx) => {
-  await ctx.answerCbQuery('Функция для продавца в разработке');
-});
-
-// ===== Мои сделки =====
+// ============================================================
+//  МОИ СДЕЛКИ
+// ============================================================
 bot.action('my_deals', async (ctx) => {
   await ctx.answerCbQuery();
   const user = getUser(ctx.from.id);
@@ -345,7 +374,9 @@ bot.action('my_deals', async (ctx) => {
   ]));
 });
 
-// ===== Управление реквизитами =====
+// ============================================================
+//  УПРАВЛЕНИЕ РЕКВИЗИТАМИ
+// ============================================================
 bot.action('rekvizity', async (ctx) => {
   await ctx.answerCbQuery();
   resetSession(ctx);
@@ -407,7 +438,9 @@ bot.action('view_rekvizity', async (ctx) => {
   ]));
 });
 
-// ===== Обработка принятия/отклонения сделки продавцом =====
+// ============================================================
+//  ПРИНЯТИЕ / ОТКЛОНЕНИЕ СДЕЛКИ
+// ============================================================
 bot.action(/accept_(.+)/, async (ctx) => {
   const dealId = ctx.match[1];
   const deal = deals.get(dealId);
@@ -419,10 +452,30 @@ bot.action(/accept_(.+)/, async (ctx) => {
     await ctx.answerCbQuery('❌ Сделка уже закрыта');
     return;
   }
-  deal.sellerId = ctx.from.id;
+
+  // Определяем, кто принимает
+  if (deal.buyerId && deal.buyerId === ctx.from.id) {
+    await ctx.answerCbQuery('❌ Вы не можете принять свою собственную сделку как покупатель');
+    return;
+  }
+  if (deal.sellerId && deal.sellerId === ctx.from.id) {
+    await ctx.answerCbQuery('❌ Вы не можете принять свою собственную сделку как продавец');
+    return;
+  }
+
+  // Если сделка создана покупателем, то принимает продавец – заполняем sellerId
+  if (deal.buyerId && !deal.sellerId) {
+    deal.sellerId = ctx.from.id;
+  } else if (deal.sellerId && !deal.buyerId) {
+    deal.buyerId = ctx.from.id;
+  } else {
+    await ctx.answerCbQuery('❌ Неизвестная ошибка');
+    return;
+  }
+
   deal.status = 'active';
   await ctx.answerCbQuery('✅ Сделка принята!');
-  await ctx.reply(`✅ Сделка #${dealId} принята. Теперь свяжитесь с покупателем для обмена.`);
+  await ctx.reply(`✅ Сделка #${dealId} принята. Теперь свяжитесь с другой стороной для обмена.`);
 });
 
 bot.action(/reject_(.+)/, async (ctx) => {
@@ -437,13 +490,14 @@ bot.action(/reject_(.+)/, async (ctx) => {
   await ctx.reply(`❌ Вы отклонили сделку #${dealId}.`);
 });
 
-// ===== Запуск бота =====
+// ============================================================
+//  ЗАПУСК БОТА
+// ============================================================
 bot.launch().then(() => {
   console.log('✅ Бот успешно запущен');
 }).catch(err => {
   console.error('❌ Ошибка запуска:', err);
 });
 
-// Graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
